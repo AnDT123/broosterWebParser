@@ -116,6 +116,8 @@ pub struct Tokenizer<'a> {
     ret_state: TokenizerState,
     current_tag_token: Option<Token>,
     tokens: Vec<Token>,
+    temporary_buffer: String,
+    last_start_tag_token: Option<Token> // this field is for end tag token check
 }
 
 impl<'a> Tokenizer<'a> {
@@ -126,6 +128,8 @@ impl<'a> Tokenizer<'a> {
             ret_state: TokenizerState::Data,
             current_tag_token: None,
             tokens: Vec::new(),
+            temporary_buffer: String::new(),
+            last_start_tag_token: None,
         }
     }
 
@@ -399,16 +403,132 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_rcdata_less_than_sign_state(&mut self) {
-        // Implementation for RCDATA less-than sign state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'/') => {
+                self.temporary_buffer = String::new();
+                self.state = TokenizerState::RCDATAEndTagOpen;
+            }
+            _ => {
+                self.emit_token(Token::Character{data: '<'});
+                self.state = TokenizerState::RCDATA 
+                self.reconsume_char();
+            }
+        }
     }
-
+    
     fn handle_rcdata_end_tag_open_state(&mut self) {
-        // Implementation for RCDATA end tag open state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(ch) if ch.is_ascii_alphabetic() => {
+                self.current_tag_token = Some(Token::EndTag {
+                    tag_name: String::new(),
+                });
+                self.state = TokenizerState::RCDATAEndTagName;
+                self.reconsume_char();
+            }
+            _ => {
+                self.emit_token(Token::Character{data: '<'});
+                self.emit_token(Token::Character{data: '/'});
+                self.state = TokenizerState:RCDATA;
+                self.reconsume_char();
+            }
+        }
     }
 
     fn handle_rcdata_end_tag_name_state(&mut self) {
-        // Implementation for RCDATA end tag name state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            // Handle whitespace characters (tab, LF, FF, space)
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+                if self.is_appropriate_end_tag_emit_token() {
+                    self.state = TokenizerState::BeforeAttributeName;
+                } else {
+                    // Fall through to "anything else"
+                    self.handle_rcdata_end_tag_name_state_anything_else();
+                }
+            }
+
+            // Handle solidus ('/')
+            Some(b'/') => {
+                if self.is_appropriate_end_tag_token() {
+                    self.state = TokenizerState::SelfClosingStartTag;
+                } else {
+                    // Fall through to "anything else"
+                    self.handle_rcdata_end_tag_name_state_anything_else();
+                }
+            }
+
+            // Handle greater-than sign ('>')
+            Some(b'>') => {
+                if self.is_appropriate_end_tag_token() {
+                    self.state = TokenizerState::Data;
+                    if let Some(token) = self.current_tag_token.clone() {
+                        self.emit_token(token);
+                    }
+                } else {
+                    // Fall through to "anything else"
+                    self.handle_rcdata_end_tag_name_state_anything_else();
+                }
+            }
+
+            // Handle ASCII upper alpha characters
+            Some(ch) if ch.is_ascii_uppercase() => {
+                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                    tag_name.push((ch + 0x20) as char); // Append lowercase version
+                }
+                self.temporary_buffer.push(ch as char); // Append to temporary buffer
+            }
+
+            // Handle ASCII lower alpha characters
+            Some(ch) if ch.is_ascii_lowercase() => {
+                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                    tag_name.push(ch as char); // Append the current input character
+                }
+                self.temporary_buffer.push(ch as char); // Append to temporary buffer
+            }
+
+            // Handle "anything else" case
+            _ => {
+                self.handle_rcdata_end_tag_name_state_anything_else();
+            }
+        }
     }
+
+    fn handle_rcdata_end_tag_name_state_anything_else(&mut self) {
+        // Emit '<', '/', and characters from the temporary buffer
+        self.emit_token(Token::Character { data: '<' });
+        self.emit_token(Token::Character { data: '/' });
+
+        for ch in self.temporary_buffer.chars() {
+            self.emit_token(Token::Character { data: ch });
+        }
+
+        // Clear the temporary buffer
+        self.temporary_buffer.clear();
+
+        // Reconsume in the RCDATA state
+        self.state = TokenizerState::RCDATA;
+        self.reconsume_char();
+    }
+
+    // Helper method to determine if the current end tag token is appropriate
+    fn is_appropriate_end_tag_token(&self) -> bool {
+        // Implement the logic to determine if the current end tag token is appropriate
+        // This typically means matching the current tag name with an expected end tag name
+        // For example, checking if the tag name matches the expected tag name in the context
+        if let Some(Token::EndTag { tag_name }) = &self.current_tag_token {
+            // Example logic (adjust as per your specific requirements)
+            // Replace "expected_tag_name" with the appropriate tag name you're looking to match
+            tag_name == "expected_tag_name" // Replace with actual logic
+        } else {
+            false
+        }
+    }
+
 
     fn handle_rawtext_less_than_sign_state(&mut self) {
         // Implementation for RAWTEXT less-than sign state
@@ -685,7 +805,15 @@ impl<'a> Tokenizer<'a> {
     fn handle_numeric_character_reference_end_state(&mut self) {
         // Implementation for Numeric character reference end state
     }
-    fn emit_token(&mut self, token: Token) {
+    fn emit_token(&mut self, token: Token) {    
+        match &token {
+            Token::StartTag => {
+                self.last_start_tag_token = Some(token.clone());
+            }
+            _ => {
+                
+            }
+        }
         println!("Emitting token: {:?}", token);
         self.tokens.push(token);
     }
