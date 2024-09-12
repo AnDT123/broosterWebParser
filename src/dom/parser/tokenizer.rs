@@ -412,7 +412,7 @@ impl<'a> Tokenizer<'a> {
             }
             _ => {
                 self.emit_token(Token::Character{data: '<'});
-                self.state = TokenizerState::RCDATA 
+                self.state = TokenizerState::RCDATA; 
                 self.reconsume_char();
             }
         }
@@ -432,7 +432,7 @@ impl<'a> Tokenizer<'a> {
             _ => {
                 self.emit_token(Token::Character{data: '<'});
                 self.emit_token(Token::Character{data: '/'});
-                self.state = TokenizerState:RCDATA;
+                self.state = TokenizerState::RCDATA;
                 self.reconsume_char();
             }
         }
@@ -442,27 +442,22 @@ impl<'a> Tokenizer<'a> {
         let next_char = self.consume_next_input_char();
 
         match next_char {
-            // Handle whitespace characters (tab, LF, FF, space)
             Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
-                if self.is_appropriate_end_tag_emit_token() {
+            if self.is_appropriate_end_tag_token() {
                     self.state = TokenizerState::BeforeAttributeName;
                 } else {
-                    // Fall through to "anything else"
                     self.handle_rcdata_end_tag_name_state_anything_else();
                 }
             }
 
-            // Handle solidus ('/')
             Some(b'/') => {
                 if self.is_appropriate_end_tag_token() {
                     self.state = TokenizerState::SelfClosingStartTag;
                 } else {
-                    // Fall through to "anything else"
                     self.handle_rcdata_end_tag_name_state_anything_else();
                 }
             }
 
-            // Handle greater-than sign ('>')
             Some(b'>') => {
                 if self.is_appropriate_end_tag_token() {
                     self.state = TokenizerState::Data;
@@ -470,28 +465,24 @@ impl<'a> Tokenizer<'a> {
                         self.emit_token(token);
                     }
                 } else {
-                    // Fall through to "anything else"
                     self.handle_rcdata_end_tag_name_state_anything_else();
                 }
             }
 
-            // Handle ASCII upper alpha characters
             Some(ch) if ch.is_ascii_uppercase() => {
                 if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
-                    tag_name.push((ch + 0x20) as char); // Append lowercase version
+                    tag_name.push((ch + 0x20) as char); 
                 }
-                self.temporary_buffer.push(ch as char); // Append to temporary buffer
+                self.temporary_buffer.push(ch as char); 
             }
 
-            // Handle ASCII lower alpha characters
             Some(ch) if ch.is_ascii_lowercase() => {
                 if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
-                    tag_name.push(ch as char); // Append the current input character
+                    tag_name.push(ch as char); 
                 }
-                self.temporary_buffer.push(ch as char); // Append to temporary buffer
+                self.temporary_buffer.push(ch as char); 
             }
 
-            // Handle "anything else" case
             _ => {
                 self.handle_rcdata_end_tag_name_state_anything_else();
             }
@@ -499,55 +490,164 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_rcdata_end_tag_name_state_anything_else(&mut self) {
-        // Emit '<', '/', and characters from the temporary buffer
+
         self.emit_token(Token::Character { data: '<' });
         self.emit_token(Token::Character { data: '/' });
-
-        for ch in self.temporary_buffer.chars() {
+        
+        let chars: Vec<char> = self.temporary_buffer.chars().collect();
+        for ch in chars {
             self.emit_token(Token::Character { data: ch });
         }
-
-        // Clear the temporary buffer
+        
         self.temporary_buffer.clear();
 
-        // Reconsume in the RCDATA state
         self.state = TokenizerState::RCDATA;
         self.reconsume_char();
     }
 
-    // Helper method to determine if the current end tag token is appropriate
+
     fn is_appropriate_end_tag_token(&self) -> bool {
-        // Implement the logic to determine if the current end tag token is appropriate
-        // This typically means matching the current tag name with an expected end tag name
-        // For example, checking if the tag name matches the expected tag name in the context
-        if let Some(Token::EndTag { tag_name }) = &self.current_tag_token {
-            // Example logic (adjust as per your specific requirements)
-            // Replace "expected_tag_name" with the appropriate tag name you're looking to match
-            tag_name == "expected_tag_name" // Replace with actual logic
-        } else {
-            false
+        match (&self.current_tag_token, &self.last_start_tag_token) {
+            (Some(Token::EndTag { tag_name: end_tag_name }), Some(Token::StartTag { tag_name: start_tag_name, .. })) => {
+                end_tag_name == start_tag_name
+            },
+            _ => false,
         }
     }
 
 
     fn handle_rawtext_less_than_sign_state(&mut self) {
-        // Implementation for RAWTEXT less-than sign state
+        let next_char = self.consume_next_input_char();
+        match next_char {
+            Some(b'/') => {
+                self.temporary_buffer.clear();
+                self.state = TokenizerState::RAWTEXTEndTagOpen;
+            }
+            _ => {
+                self.emit_token(Token::Character { data: '<' });
+                self.state = TokenizerState::RAWTEXT;
+                self.reconsume_char();
+            }
+        }
     }
 
     fn handle_rawtext_end_tag_open_state(&mut self) {
-        // Implementation for RAWTEXT end tag open state
+        let next_char = self.consume_next_input_char();
+        match next_char {
+            Some(ch) if ch.is_ascii_alphabetic() => {
+                self.current_tag_token = Some(Token::EndTag { tag_name: String::new() });
+                self.state = TokenizerState::RAWTEXTEndTagName;
+                self.reconsume_char();
+            }
+            _ => {
+                self.emit_token(Token::Character { data: '<' });
+                self.emit_token(Token::Character { data: '/' });
+                self.state = TokenizerState::RAWTEXT;
+                self.reconsume_char();
+            }
+        }
     }
 
     fn handle_rawtext_end_tag_name_state(&mut self) {
-        // Implementation for RAWTEXT end tag name state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+            if self.is_appropriate_end_tag_token() {
+                    self.state = TokenizerState::BeforeAttributeName;
+                } else {
+                    self.handle_rawtext_end_tag_name_state_anything_else();
+                }
+            }
+
+            Some(b'/') => {
+                if self.is_appropriate_end_tag_token() {
+                    self.state = TokenizerState::SelfClosingStartTag;
+                } else {
+                    self.handle_rawtext_end_tag_name_state_anything_else();
+                }
+            }
+
+            Some(b'>') => {
+                if self.is_appropriate_end_tag_token() {
+                    self.state = TokenizerState::Data;
+                    if let Some(token) = self.current_tag_token.clone() {
+                        self.emit_token(token);
+                    }
+                } else {
+                    self.handle_rawtext_end_tag_name_state_anything_else();
+                }
+            }
+
+            Some(ch) if ch.is_ascii_uppercase() => {
+                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                    tag_name.push((ch + 0x20) as char); 
+                }
+                self.temporary_buffer.push(ch as char); 
+            }
+
+            Some(ch) if ch.is_ascii_lowercase() => {
+                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                    tag_name.push(ch as char); 
+                }
+                self.temporary_buffer.push(ch as char); 
+            }
+
+            _ => {
+                self.handle_rawtext_end_tag_name_state_anything_else();
+            }
     }
 
+    }
+    fn handle_rawtext_end_tag_name_state_anything_else(&mut self) {
+
+        self.emit_token(Token::Character { data: '<' });
+        self.emit_token(Token::Character { data: '/' });
+        
+        let chars: Vec<char> = self.temporary_buffer.chars().collect();
+        for ch in chars {
+            self.emit_token(Token::Character { data: ch });
+        }
+        
+        self.temporary_buffer.clear();
+
+        self.state = TokenizerState::RAWTEXT;
+        self.reconsume_char();
+    }
     fn handle_script_data_less_than_sign_state(&mut self) {
-        // Implementation for Script data less-than sign state
+        let next_char = self.consume_next_input_char();
+        match next_char {
+            Some(b'/') => {
+                self.temporary_buffer.clear();
+                self.state = TokenizerState::ScriptDataEndTagOpen;
+            }
+            Some(b'!') => {
+                self.state = TokenizerState::ScriptDataEscapeStart;
+                self.emit_token(Token::Character { data: '<' });
+                self.emit_token(Token::Character { data: '!' });
+            }
+            _ => {
+                self.emit_token(Token::Character { data: '<' });
+                self.reconsume_char();
+            }
+        }
     }
 
     fn handle_script_data_end_tag_open_state(&mut self) {
-        // Implementation for Script data end tag open state
+        let next_char = self.consume_next_input_char();
+        match next_char {
+            Some(ch) if ch.is_ascii_alphabetic() => {
+                self.current_tag_token = Some(Token::EndTag { tag_name: String::new() });
+                self.state = TokenizerState::ScriptDataEndTagName;
+                self.reconsume_char();
+            }
+            _ => {
+                self.emit_token(Token::Character { data: '<' });
+                self.emit_token(Token::Character { data: '/' });
+                self.state = TokenizerState::ScriptData;
+                self.reconsume_char();
+            }
+        }
     }
 
     fn handle_script_data_end_tag_name_state(&mut self) {
@@ -807,7 +907,7 @@ impl<'a> Tokenizer<'a> {
     }
     fn emit_token(&mut self, token: Token) {    
         match &token {
-            Token::StartTag => {
+            Token::StartTag{..} => {
                 self.last_start_tag_token = Some(token.clone());
             }
             _ => {
