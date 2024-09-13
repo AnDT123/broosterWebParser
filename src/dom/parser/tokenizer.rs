@@ -17,6 +17,9 @@ pub enum Token {
     },
     EndTag {
         tag_name: String,
+        self_closing: bool,
+        attributes: Vec<(String, String)>,
+
     },
     Comment {
         data: String,
@@ -25,6 +28,26 @@ pub enum Token {
         data: char,
     },
     EndOfFile,
+}
+impl Token {
+    pub fn attribute_exists(&self, name: &str) -> bool {
+        match self {
+            Token::StartTag { attributes, .. } | Token::EndTag { attributes, .. } => {
+                attributes.iter().any(|(attr_name, _)| attr_name == name)
+            },
+            _ => false,
+        }
+    }
+    pub fn add_attribute(&mut self, name: String, value: String) {
+        match self {
+            Token::StartTag { attributes, .. } | Token::EndTag { attributes, .. } => {
+                if !attributes.iter().any(|(attr_name, _)| *attr_name == name) {
+                    attributes.push((name, value));
+                }
+            },
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -117,7 +140,9 @@ pub struct Tokenizer<'a> {
     current_tag_token: Option<Token>,
     tokens: Vec<Token>,
     temporary_buffer: String,
-    last_start_tag_token: Option<Token> // this field is for end tag token check
+    last_start_tag_token: Option<Token> ,// this field is for end tag token validity check
+    current_tag_name: String, //remember to clear after put into current_tag_token  
+    current_tag_value: String, //same as above
 }
 
 impl<'a> Tokenizer<'a> {
@@ -130,6 +155,8 @@ impl<'a> Tokenizer<'a> {
             tokens: Vec::new(),
             temporary_buffer: String::new(),
             last_start_tag_token: None,
+            current_tag_name: String::new(),
+            current_tag_value: String::new(),
         }
     }
 
@@ -340,6 +367,8 @@ impl<'a> Tokenizer<'a> {
             Some(ch) if ch.is_ascii_alphabetic() => {
                 self.current_tag_token = Some(Token::EndTag {
                     tag_name: String::new(),
+                    self_closing: false,
+                    attributes: Vec::new(),
                 });
                 self.state = TokenizerState::TagName;
                 self.reconsume_char();
@@ -425,6 +454,9 @@ impl<'a> Tokenizer<'a> {
             Some(ch) if ch.is_ascii_alphabetic() => {
                 self.current_tag_token = Some(Token::EndTag {
                     tag_name: String::new(),
+                    self_closing: false,       
+                    attributes: Vec::new(),    
+                
                 });
                 self.state = TokenizerState::RCDATAEndTagName;
                 self.reconsume_char();
@@ -470,14 +502,14 @@ impl<'a> Tokenizer<'a> {
             }
 
             Some(ch) if ch.is_ascii_uppercase() => {
-                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                if let Some(Token::EndTag { ref mut tag_name,.. }) = self.current_tag_token.as_mut() {
                     tag_name.push((ch + 0x20) as char); 
                 }
                 self.temporary_buffer.push(ch as char); 
             }
 
             Some(ch) if ch.is_ascii_lowercase() => {
-                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                if let Some(Token::EndTag { ref mut tag_name,.. }) = self.current_tag_token.as_mut() {
                     tag_name.push(ch as char); 
                 }
                 self.temporary_buffer.push(ch as char); 
@@ -508,7 +540,7 @@ impl<'a> Tokenizer<'a> {
 
     fn is_appropriate_end_tag_token(&self) -> bool {
         match (&self.current_tag_token, &self.last_start_tag_token) {
-            (Some(Token::EndTag { tag_name: end_tag_name }), Some(Token::StartTag { tag_name: start_tag_name, .. })) => {
+            (Some(Token::EndTag { tag_name: end_tag_name,.. }), Some(Token::StartTag { tag_name: start_tag_name, .. })) => {
                 end_tag_name == start_tag_name
             },
             _ => false,
@@ -535,7 +567,7 @@ impl<'a> Tokenizer<'a> {
         let next_char = self.consume_next_input_char();
         match next_char {
             Some(ch) if ch.is_ascii_alphabetic() => {
-                self.current_tag_token = Some(Token::EndTag { tag_name: String::new() });
+                self.current_tag_token = Some(Token::EndTag { tag_name: String::new(), self_closing: false, attributes: Vec::new(),});
                 self.state = TokenizerState::RAWTEXTEndTagName;
                 self.reconsume_char();
             }
@@ -580,14 +612,14 @@ impl<'a> Tokenizer<'a> {
             }
 
             Some(ch) if ch.is_ascii_uppercase() => {
-                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                if let Some(Token::EndTag { ref mut tag_name,..}) = self.current_tag_token.as_mut() {
                     tag_name.push((ch + 0x20) as char); 
                 }
                 self.temporary_buffer.push(ch as char); 
             }
 
             Some(ch) if ch.is_ascii_lowercase() => {
-                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                if let Some(Token::EndTag { ref mut tag_name,..}) = self.current_tag_token.as_mut() {
                     tag_name.push(ch as char); 
                 }
                 self.temporary_buffer.push(ch as char); 
@@ -639,7 +671,7 @@ impl<'a> Tokenizer<'a> {
         let next_char = self.consume_next_input_char();
         match next_char {
             Some(ch) if ch.is_ascii_alphabetic() => {
-                self.current_tag_token = Some(Token::EndTag { tag_name: String::new() });
+                self.current_tag_token = Some(Token::EndTag { tag_name: String::new() ,self_closing: false, attributes: Vec::new()});
                 self.state = TokenizerState::ScriptDataEndTagName;
                 self.reconsume_char();
             }
@@ -683,14 +715,14 @@ impl<'a> Tokenizer<'a> {
             }
 
             Some(ch) if ch.is_ascii_uppercase() => {
-                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                if let Some(Token::EndTag { ref mut tag_name,..}) = self.current_tag_token.as_mut() {
                     tag_name.push((ch + 0x20) as char); 
                 }
                 self.temporary_buffer.push(ch as char); 
             }
 
             Some(ch) if ch.is_ascii_lowercase() => {
-                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                if let Some(Token::EndTag { ref mut tag_name,..}) = self.current_tag_token.as_mut() {
                     tag_name.push(ch as char); 
                 }
                 self.temporary_buffer.push(ch as char); 
@@ -878,7 +910,7 @@ impl<'a> Tokenizer<'a> {
     
         match next_char {
             Some(ch) if ch.is_ascii_alphabetic() => {
-                self.current_tag_token = Some(Token::EndTag { tag_name: String::new() });
+                self.current_tag_token = Some(Token::EndTag { tag_name: String::new() , self_closing: false, attributes: Vec::new()});
                 self.state = TokenizerState::ScriptDataEscapedEndTagName;
                 self.reconsume_char();
             }
@@ -925,14 +957,14 @@ impl<'a> Tokenizer<'a> {
             }
     
             Some(ch) if ch.is_ascii_uppercase() => {
-                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                if let Some(Token::EndTag { ref mut tag_name,..}) = self.current_tag_token.as_mut() {
                     tag_name.push((ch + 0x20) as char); 
                 }
                 self.temporary_buffer.push(ch as char); 
             }
 
             Some(ch) if ch.is_ascii_lowercase() => {
-                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                if let Some(Token::EndTag { ref mut tag_name,..}) = self.current_tag_token.as_mut() {
                     tag_name.push(ch as char); 
                 }
                 self.temporary_buffer.push(ch as char); 
@@ -1140,13 +1172,11 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    // 13.2.5.32 Before attribute name state
     fn handle_before_attribute_name_state(&mut self) {
         let next_char = self.consume_next_input_char();
 
         match next_char {
             Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
-                // Ignore the character
             }
 
             Some(b'/') | Some(b'>') | None => {
@@ -1156,34 +1186,101 @@ impl<'a> Tokenizer<'a> {
 
             Some(b'=') => {
                 self.emit_parse_error("unexpected-equals-sign-before-attribute-name");
-                let attribute = Attribute {
-                    name: "=".to_string(),
-                    value: String::new(),
-                };
-                self.current_tag_token.add_attribute(attribute);
+                let name= "=".to_string(); //need to check attribute name duplication before putting in the current_tag_token
+                self.current_tag_value.clear();
                 self.state = TokenizerState::AttributeName;
             }
 
             Some(_) => {
-                let attribute = Attribute {
-                    name: String::new(),
-                    value: String::new(),
-                };
-                self.current_tag_token.add_attribute(attribute);
+                self.current_tag_name.clear();
+                self.current_tag_value.clear();
                 self.state = TokenizerState::AttributeName;
                 self.reconsume_char();
             }
         }
     }
 
-
+    //13.2.5.33 Attribute name state
     fn handle_attribute_name_state(&mut self) {
-        // Implementation for Attribute name state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') |
+            Some(b'/') | Some(b'>') | None => {
+                self.state = TokenizerState::AfterAttributeName;
+                self.reconsume_char();
+            }
+
+            Some(b'=') => {
+                self.state = TokenizerState::BeforeAttributeValue;
+            }
+
+            Some(c) if c.is_ascii_uppercase() => {
+                self.current_tag_name.push((c + 0x20) as char);
+            }
+
+            Some(b'\x00') => {
+                self.emit_parse_error("unexpected-null-character");
+                self.current_tag_name.push('\u{FFFD}' as char);
+            }
+
+            Some(b'"') | Some(b'\'') | Some(b'<') => {
+                self.emit_parse_error("unexpected-character-in-attribute-name");
+                self.current_tag_name.push(next_char.unwrap() as char);
+            }
+
+            Some(_) => {
+                self.current_tag_name.push(next_char.unwrap() as char);
+            }
+        }
     }
 
+    //13.2.5.34 After attribute name state
     fn handle_after_attribute_name_state(&mut self) {
-        // Implementation for After attribute name state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+            }
+    
+            Some(b'/') => {
+                //no value next so add name to current_tag_token
+                self.add_attribute_to_current_tag_token();
+                
+                self.state = TokenizerState::SelfClosingStartTag;
+            }
+    
+            Some(b'=') => {
+                // there's a value after name
+                self.state = TokenizerState::BeforeAttributeValue;
+            }
+    
+            Some(b'>') => {
+                //no value next so add name to current_tag_token
+                self.add_attribute_to_current_tag_token();
+
+                self.state = TokenizerState::Data;
+                self.emit_current_tag_token();
+            }
+    
+            None => {
+                //no value next so add name to current_tag_token
+                self.add_attribute_to_current_tag_token();
+
+                self.emit_parse_error("eof-in-tag");
+                self.emit_token(Token::EndOfFile);
+            }
+    
+            Some(_) => {
+                //no value next so add name to current_tag_token
+                self.add_attribute_to_current_tag_token();
+
+                self.state = TokenizerState::AttributeName;
+                self.reconsume_char();
+            }
+        }
     }
+    
 
     fn handle_before_attribute_value_state(&mut self) {
         // Implementation for Before attribute value state
@@ -1368,6 +1465,7 @@ impl<'a> Tokenizer<'a> {
     fn handle_numeric_character_reference_end_state(&mut self) {
         // Implementation for Numeric character reference end state
     }
+
     fn emit_token(&mut self, token: Token) {    
         match &token {
             Token::StartTag{..} => {
@@ -1380,17 +1478,53 @@ impl<'a> Tokenizer<'a> {
         println!("Emitting token: {:?}", token);
         self.tokens.push(token);
     }
+
     fn consume_next_input_char(&mut self) -> Option<u8>{
         let byte_character = self.input_stream.current_cpy();
         self.input_stream.advance();
         byte_character
     }
+
     fn reconsume_char(&mut self) {        
         self.input_stream.idx -= 1;
         self.input_stream.idx = max(self.input_stream.idx, 0);
     }
+
     fn emit_parse_error(&self, err: &str){
         eprint!("{err}\n");
+    }
+
+    fn add_attribute_to_current_tag_token(&mut self){
+        let tag_name_exists = self.current_tag_attr_name_exist();
+        if let Some(ref mut t) = self.current_tag_token {
+            if tag_name_exists {
+                self.emit_parse_error("attribute-name-existed");
+            }else{
+                t.add_attribute(self.current_tag_name.clone(), self.current_tag_value.clone());
+                self.current_tag_name.clear();
+                self.current_tag_value.clear();
+            }
+
+        } else {
+            self.emit_parse_error("Token is None; cannot add attribute.");
+        }
+    }
+
+    fn current_tag_attr_name_exist(&self) -> bool{
+        if let Some(ref t) = self.current_tag_token {
+            t.attribute_exists(&self.current_tag_name)
+        } else {
+            self.emit_parse_error("Token is None; cannot add attribute.");
+            false
+        }
+    }
+    fn emit_current_tag_token(&mut self) {
+
+        if let Some(token) = self.current_tag_token.take() { 
+            self.emit_token(token); 
+        } else {
+            eprintln!("No current tag token to emit.");
+        }
     }
 }
 
