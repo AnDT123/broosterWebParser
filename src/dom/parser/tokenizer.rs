@@ -231,7 +231,7 @@ impl<'a> Tokenizer<'a> {
             }
             Some(b'<') => self.state = TokenizerState::TagOpen, 
             Some(b'\0') => {
-                eprintln!("Parse error: Unexpected null character");
+                self.emit_parse_error("unexpected-null-character");
                 self.emit_token(Token::Character{data: next_char.unwrap() as char});
             }
             None => self.emit_token(Token::EndOfFile),
@@ -249,7 +249,7 @@ impl<'a> Tokenizer<'a> {
             }
             Some(b'<') => self.state = TokenizerState::RCDATALessThanSign, 
             Some(b'\0') => {
-                eprintln!("Parse error: Unexpected null character");
+                self.emit_parse_error("unexpected-null-character");
                 self.emit_token(Token::Character{data: '\u{FFFD}'}); //REPLACEMENT CHARACTER character token.
             }
             None => self.emit_token(Token::EndOfFile), 
@@ -263,7 +263,7 @@ impl<'a> Tokenizer<'a> {
         match next_char {
             Some(b'<') => self.state = TokenizerState::RAWTEXTLessThanSign,
             Some(b'\0') => {
-                eprintln!("Parse error: Unexpected null character");
+                self.emit_parse_error("unexpected-null-character");
                 self.emit_token(Token::Character{data: '\u{FFFD}'});
             }
             None => self.emit_token(Token::EndOfFile),
@@ -277,7 +277,7 @@ impl<'a> Tokenizer<'a> {
         match next_char {
             Some(b'<') => self.state = TokenizerState::ScriptDataLessThanSign,
             Some(b'\0') => {
-                eprintln!("Parse error: Unexpected null character");
+                self.emit_parse_error("unexpected-null-character");
                 self.emit_token(Token::Character{data: '\u{FFFD}'});
             }
             None => self.emit_token(Token::EndOfFile),
@@ -290,7 +290,7 @@ impl<'a> Tokenizer<'a> {
     
         match next_char {
             Some(b'\0') => {
-                eprintln!("Parse error: Unexpected null character");
+                self.emit_parse_error("unexpected-null-character");
                 self.emit_token(Token::Character{data: '\u{FFFD}'});
             }
             None => self.emit_token(Token::EndOfFile),
@@ -314,18 +314,18 @@ impl<'a> Tokenizer<'a> {
                 self.reconsume_char();
             }
             Some(b'?') => {
-                eprintln!("Parse error: Unexpected question mark instead of tag name");
+                self.emit_parse_error("unexpected-question-mark-instead-of-tag-name");
                 self.emit_token(Token::Comment{data:String::new()});
                 self.state = TokenizerState::BogusComment;
                 self.reconsume_char();
             }
             None => {
-                eprintln!("Parse error: EOF before tag name");
+                self.emit_parse_error(" eof-before-tag-name");
                 self.emit_token(Token::Character{data: '<'});
                 self.emit_token(Token::EndOfFile);
             }
             Some(_) => {
-                eprintln!("Parse error: Invalid first character of tag name");
+                self.emit_parse_error("invalid-first-character-of-tag-name");
                 self.emit_token(Token::Character{data: '<'});
                 self.state = TokenizerState::Data;
                 self.reconsume_char();
@@ -345,17 +345,17 @@ impl<'a> Tokenizer<'a> {
                 self.reconsume_char();
             }
             Some(b'>') => {
-                eprintln!("Parse error: Missing end tag name");
+                self.emit_parse_error("missing-end-tag-name");
                 self.state = TokenizerState::Data;
             }
             None => {
-                eprintln!("Parse error: EOF before tag name");
+                self.emit_parse_error("eof-before-tag-name");
                 self.emit_token(Token::Character{data: '<'});
                 self.emit_token(Token::Character{data: '/'});
                 self.emit_token(Token::EndOfFile);
             }
             Some(_) => {
-                eprintln!("Parse error: Invalid first character of tag name");
+                self.emit_parse_error("invalid-first-character-of-tag-name");
                 self.emit_token(Token::Comment{data:String::new()});
                 self.state = TokenizerState::BogusComment;
                 self.reconsume_char();
@@ -385,13 +385,13 @@ impl<'a> Tokenizer<'a> {
                 }
             }
             Some(b'\0') => {
-                eprintln!("Parse error: Unexpected null character");
+                self.emit_parse_error("unexpected-null-character");
                 if let Some(Token::StartTag { tag_name, .. }) = self.current_tag_token.as_mut() {
                     tag_name.push('\u{FFFD}');
                 }
             }
             None => {
-                eprintln!("Parse error: EOF in tag");
+                self.emit_parse_error("Parse error: EOF in tag");
                 self.emit_token(Token::EndOfFile);
             }
             Some(ch) => {
@@ -614,6 +614,7 @@ impl<'a> Tokenizer<'a> {
         self.state = TokenizerState::RAWTEXT;
         self.reconsume_char();
     }
+
     fn handle_script_data_less_than_sign_state(&mut self) {
         let next_char = self.consume_next_input_char();
         match next_char {
@@ -633,6 +634,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
+
     fn handle_script_data_end_tag_open_state(&mut self) {
         let next_char = self.consume_next_input_char();
         match next_char {
@@ -649,70 +651,531 @@ impl<'a> Tokenizer<'a> {
             }
         }
     }
-
     fn handle_script_data_end_tag_name_state(&mut self) {
-        // Implementation for Script data end tag name state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+            if self.is_appropriate_end_tag_token() {
+                    self.state = TokenizerState::BeforeAttributeName;
+                } else {
+                    self.handle_script_end_tag_name_state_anything_else();
+                }
+            }
+
+            Some(b'/') => {
+                if self.is_appropriate_end_tag_token() {
+                    self.state = TokenizerState::SelfClosingStartTag;
+                } else {
+                    self.handle_script_end_tag_name_state_anything_else();
+                }
+            }
+
+            Some(b'>') => {
+                if self.is_appropriate_end_tag_token() {
+                    self.state = TokenizerState::Data;
+                    if let Some(token) = self.current_tag_token.clone() {
+                        self.emit_token(token);
+                    }
+                } else {
+                    self.handle_script_end_tag_name_state_anything_else();
+                }
+            }
+
+            Some(ch) if ch.is_ascii_uppercase() => {
+                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                    tag_name.push((ch + 0x20) as char); 
+                }
+                self.temporary_buffer.push(ch as char); 
+            }
+
+            Some(ch) if ch.is_ascii_lowercase() => {
+                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                    tag_name.push(ch as char); 
+                }
+                self.temporary_buffer.push(ch as char); 
+            }
+
+            _ => {
+                self.handle_script_end_tag_name_state_anything_else();
+            }
+        }
+    }
+    fn handle_script_end_tag_name_state_anything_else(&mut self) {
+
+        self.emit_token(Token::Character { data: '<' });
+        self.emit_token(Token::Character { data: '/' });
+        
+        let chars: Vec<char> = self.temporary_buffer.chars().collect();
+        for ch in chars {
+            self.emit_token(Token::Character { data: ch });
+        }
+        
+        self.temporary_buffer.clear();
+
+        self.state = TokenizerState::ScriptData;
+        self.reconsume_char();
     }
 
     fn handle_script_data_escape_start_state(&mut self) {
-        // Implementation for Script data escape start state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'-') => {
+                self.state = TokenizerState::ScriptDataEscapeStartDash;
+                self.emit_token(Token::Character { data: '-' });
+            }
+    
+            _ => {
+                self.state = TokenizerState::ScriptData;
+                self.reconsume_char();
+            }
+        }
     }
 
     fn handle_script_data_escape_start_dash_state(&mut self) {
-        // Implementation for Script data escape start dash state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'-') => {
+                self.state = TokenizerState::ScriptDataEscapedDashDash;
+                self.emit_token(Token::Character { data: '-' });
+            }
+
+            _ => {
+                self.state = TokenizerState::ScriptData;
+                self.reconsume_char(); 
+            }
+        }
     }
 
     fn handle_script_data_escaped_state(&mut self) {
-        // Implementation for Script data escaped state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'-') => {
+                self.state = TokenizerState::ScriptDataEscapedDash;
+                self.emit_token(Token::Character { data: '-' });
+            }
+    
+            Some(b'<') => {
+                self.state = TokenizerState::ScriptDataEscapedLessThanSign;
+            }
+    
+            Some(0x00) => {
+                self.emit_parse_error("unexpected-null-character");
+                self.emit_token(Token::Character { data: '\u{FFFD}' }); // Emit a replacement character (U+FFFD)
+            }
+    
+            None => {
+                self.emit_parse_error("eof-in-script-html-comment-like-text");
+                self.emit_token(Token::EndOfFile);
+            }
+    
+            Some(ch) => {
+                self.emit_token(Token::Character { data: ch as char});
+            }
+        }
     }
-
+    
+    //13.2.5.21 Script data escaped dash state
     fn handle_script_data_escaped_dash_state(&mut self) {
-        // Implementation for Script data escaped dash state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'-') => {
+                self.state = TokenizerState::ScriptDataEscapedDashDash;
+                self.emit_token(Token::Character { data: '-' });
+            }
+    
+            Some(b'<') => {
+                self.state = TokenizerState::ScriptDataEscapedLessThanSign;
+            }
+    
+            Some(0x00) => {
+                self.emit_parse_error("unexpected-null-character");
+                self.state = TokenizerState::ScriptDataEscaped;
+                self.emit_token(Token::Character { data: '\u{FFFD}' });
+            }
+    
+            // Handling EOF
+            None => {
+                self.emit_parse_error("eof-in-script-html-comment-like-text");
+                self.emit_token(Token::EndOfFile);
+            }
+    
+            Some(ch) => {
+                self.state = TokenizerState::ScriptDataEscaped;
+                self.emit_token(Token::Character { data: ch as char});
+            }
+        }
     }
-
+    
+    //13.2.5.22 Script data escaped dash dash state
     fn handle_script_data_escaped_dash_dash_state(&mut self) {
-        // Implementation for Script data escaped dash dash state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'-') => {
+                self.emit_token(Token::Character { data: '-' });
+            }
+    
+            Some(b'<') => {
+                self.state = TokenizerState::ScriptDataEscapedLessThanSign;
+            }
+    
+            Some(b'>') => {
+                self.state = TokenizerState::ScriptData;
+                self.emit_token(Token::Character { data: '>' });
+            }
+    
+            Some(0x00) => {
+                self.emit_parse_error("unexpected-null-character");
+                self.state = TokenizerState::ScriptDataEscaped;
+                self.emit_token(Token::Character { data: '\u{FFFD}' }); // Emit a replacement character (U+FFFD)
+            }
+    
+            None => {
+                self.emit_parse_error("eof-in-script-html-comment-like-text");
+                self.emit_token(Token::EndOfFile);
+            }
+    
+            Some(ch) => {
+                self.state = TokenizerState::ScriptDataEscaped;
+                self.emit_token(Token::Character { data: ch as char});
+            }
+        }
     }
-
+    
+    //13.2.5.23 Script data escaped less-than sign state
     fn handle_script_data_escaped_less_than_sign_state(&mut self) {
-        // Implementation for Script data escaped less-than sign state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'/') => {
+                self.temporary_buffer.clear();
+                self.state = TokenizerState::ScriptDataEscapedEndTagOpen;
+            }
+    
+            Some(ch) if ch.is_ascii_alphabetic() => {
+                self.temporary_buffer.clear();
+                self.emit_token(Token::Character { data: '<' });
+                self.state = TokenizerState::ScriptDataDoubleEscapeStart;
+                self.reconsume_char();
+            }
+    
+            _ => {
+                self.emit_token(Token::Character { data: '<' });
+                self.state = TokenizerState::ScriptDataEscaped;
+                self.reconsume_char(); 
+            }
+        }
     }
 
+    //13.2.5.24 Script data escaped end tag open state
     fn handle_script_data_escaped_end_tag_open_state(&mut self) {
-        // Implementation for Script data escaped end tag open state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(ch) if ch.is_ascii_alphabetic() => {
+                self.current_tag_token = Some(Token::EndTag { tag_name: String::new() });
+                self.state = TokenizerState::ScriptDataEscapedEndTagName;
+                self.reconsume_char();
+            }
+    
+            _ => {
+                self.emit_token(Token::Character { data: '<' });
+                self.emit_token(Token::Character { data: '/' });
+                self.state = TokenizerState::ScriptDataEscaped;
+                self.reconsume_char();
+            }
+        }
     }
-
+    
+    //13.2.5.25 Script data escaped end tag name state
     fn handle_script_data_escaped_end_tag_name_state(&mut self) {
-        // Implementation for Script data escaped end tag name state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+                if self.is_appropriate_end_tag_token() {
+                    self.state = TokenizerState::BeforeAttributeName;
+                } else {
+                    self.handle_script_data_escaped_end_tag_name_state_anything_else();
+                }
+            }
+    
+            Some(b'/') => {
+                if self.is_appropriate_end_tag_token() {
+                    self.state = TokenizerState::SelfClosingStartTag;
+                } else {
+                    self.handle_script_data_escaped_end_tag_name_state_anything_else();
+                }
+            }
+    
+            Some(b'>') => {
+                if self.is_appropriate_end_tag_token() {
+                    self.state = TokenizerState::Data;
+                    if let Some(token) = self.current_tag_token.clone() {
+                        self.emit_token(token);
+                    }
+                } else {
+                    self.handle_script_data_escaped_end_tag_name_state_anything_else();
+                }
+            }
+    
+            Some(ch) if ch.is_ascii_uppercase() => {
+                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                    tag_name.push((ch + 0x20) as char); 
+                }
+                self.temporary_buffer.push(ch as char); 
+            }
+
+            Some(ch) if ch.is_ascii_lowercase() => {
+                if let Some(Token::EndTag { ref mut tag_name }) = self.current_tag_token.as_mut() {
+                    tag_name.push(ch as char); 
+                }
+                self.temporary_buffer.push(ch as char); 
+            }
+    
+            _ => {
+                self.handle_script_data_escaped_end_tag_name_state_anything_else();
+            }
+        }
+    }
+    
+    fn handle_script_data_escaped_end_tag_name_state_anything_else(&mut self){
+        self.emit_token(Token::Character { data: '<' });
+        self.emit_token(Token::Character { data: '/' });
+        
+        let chars: Vec<char> = self.temporary_buffer.chars().collect();
+        for ch in chars {
+            self.emit_token(Token::Character { data: ch });
+        }
+        
+        self.temporary_buffer.clear();
+
+        self.state = TokenizerState::ScriptDataEscaped;
+        self.reconsume_char();
     }
 
+    // 13.2.5.26 Script data double escape start state
     fn handle_script_data_double_escape_start_state(&mut self) {
-        // Implementation for Script data double escape start state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') | Some(b'/') | Some(b'>') => {
+                if self.temporary_buffer == "script" {
+                    self.state = TokenizerState::ScriptDataDoubleEscaped;
+                } else {
+                    self.state = TokenizerState::ScriptDataEscaped;
+                }
+                self.emit_token(Token::Character { data: next_char.unwrap() as char });
+            }
+
+            Some(ch) if ch.is_ascii_uppercase() => {
+                self.temporary_buffer.push((ch + 0x20) as char);
+                self.emit_token(Token::Character { data: ch as char });
+            }
+
+            Some(ch) if ch.is_ascii_lowercase() => {
+                self.temporary_buffer.push(ch as char);
+                self.emit_token(Token::Character { data: ch as char });
+            }
+
+            _ => {
+                self.state = TokenizerState::ScriptDataEscaped;
+                self.reconsume_char();
+            }
+        }
     }
 
+    // 13.2.5.27 Script data double escaped state
     fn handle_script_data_double_escaped_state(&mut self) {
-        // Implementation for Script data double escaped state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'-') => {
+                self.state = TokenizerState::ScriptDataDoubleEscapedDash;
+                self.emit_token(Token::Character { data: '-' });
+            }
+
+            Some(b'<') => {
+                self.state = TokenizerState::ScriptDataDoubleEscapedLessThanSign;
+                self.emit_token(Token::Character { data: '<' });
+            }
+
+            Some(0x00) => {
+                self.emit_parse_error("unexpected-null-character");
+                self.emit_token(Token::Character { data: '\u{FFFD}' });
+            }
+
+            None => {
+                self.emit_parse_error("eof-in-script-html-comment-like-text");
+                self.emit_token(Token::EndOfFile);
+            }
+
+            Some(ch) => {
+                self.emit_token(Token::Character { data: ch as char });
+            }
+        }
     }
 
+    // 13.2.5.28 Script data double escaped dash state
     fn handle_script_data_double_escaped_dash_state(&mut self) {
-        // Implementation for Script data double escaped dash state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'-') => {
+                self.state = TokenizerState::ScriptDataDoubleEscapedDashDash;
+                self.emit_token(Token::Character { data: '-' });
+            }
+
+            Some(b'<') => {
+                self.state = TokenizerState::ScriptDataDoubleEscapedLessThanSign;
+                self.emit_token(Token::Character { data: '<' });
+            }
+
+            Some(0x00) => {
+                self.emit_parse_error("unexpected-null-character");
+                self.state = TokenizerState::ScriptDataDoubleEscaped;
+                self.emit_token(Token::Character { data: '\u{FFFD}' });
+            }
+
+            None => {
+                self.emit_parse_error("eof-in-script-html-comment-like-text");
+                self.emit_token(Token::EndOfFile);
+            }
+
+            Some(ch) => {
+                self.state = TokenizerState::ScriptDataDoubleEscaped;
+                self.emit_token(Token::Character { data: ch as char });
+            }
+        }
     }
 
+    // 13.2.5.29 Script data double escaped dash dash state
     fn handle_script_data_double_escaped_dash_dash_state(&mut self) {
-        // Implementation for Script data double escaped dash dash state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'-') => {
+                self.emit_token(Token::Character { data: '-' });
+            }
+
+            Some(b'<') => {
+                self.state = TokenizerState::ScriptDataDoubleEscapedLessThanSign;
+                self.emit_token(Token::Character { data: '<' });
+            }
+
+            Some(b'>') => {
+                self.state = TokenizerState::ScriptData;
+                self.emit_token(Token::Character { data: '>' });
+            }
+
+            Some(0x00) => {
+                self.emit_parse_error("unexpected-null-character");
+                self.state = TokenizerState::ScriptDataDoubleEscaped;
+                self.emit_token(Token::Character { data: '\u{FFFD}' });
+            }
+
+            None => {
+                self.emit_parse_error("eof-in-script-html-comment-like-text");
+                self.emit_token(Token::EndOfFile);
+            }
+
+            Some(ch) => {
+                self.state = TokenizerState::ScriptDataDoubleEscaped;
+                self.emit_token(Token::Character { data: ch as char });
+            }
+        }
     }
 
+    // 13.2.5.30 Script data double escaped less-than sign state
     fn handle_script_data_double_escaped_less_than_sign_state(&mut self) {
-        // Implementation for Script data double escaped less-than sign state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'/') => {
+                self.temporary_buffer.clear();
+                self.state = TokenizerState::ScriptDataDoubleEscapeEnd;
+                self.emit_token(Token::Character { data: '/' });
+            }
+
+            _ => {
+                self.state = TokenizerState::ScriptDataDoubleEscaped;
+                self.reconsume_char();
+            }
+        }
     }
 
+    // 13.2.5.31 Script data double escape end state
     fn handle_script_data_double_escape_end_state(&mut self) {
-        // Implementation for Script data double escape end state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') | Some(b'/') | Some(b'>') => {
+                if self.temporary_buffer == "script" {
+                    self.state = TokenizerState::ScriptDataEscaped;
+                } else {
+                    self.state = TokenizerState::ScriptDataDoubleEscaped;
+                }
+                self.emit_token(Token::Character { data: next_char.unwrap() as char });
+            }
+
+            Some(ch) if ch.is_ascii_uppercase() => {
+                self.temporary_buffer.push((ch + 0x20) as char);
+                self.emit_token(Token::Character { data: ch as char });
+            }
+
+            Some(ch) if ch.is_ascii_lowercase() => {
+                self.temporary_buffer.push(ch as char);
+                self.emit_token(Token::Character { data: ch as char });
+            }
+
+            _ => {
+                self.state = TokenizerState::ScriptDataDoubleEscaped;
+                self.reconsume_char();
+            }
+        }
     }
 
+    // 13.2.5.32 Before attribute name state
     fn handle_before_attribute_name_state(&mut self) {
-        // Implementation for Before attribute name state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+                // Ignore the character
+            }
+
+            Some(b'/') | Some(b'>') | None => {
+                self.state = TokenizerState::AfterAttributeName;
+                self.reconsume_char();
+            }
+
+            Some(b'=') => {
+                self.emit_parse_error("unexpected-equals-sign-before-attribute-name");
+                let attribute = Attribute {
+                    name: "=".to_string(),
+                    value: String::new(),
+                };
+                self.current_tag_token.add_attribute(attribute);
+                self.state = TokenizerState::AttributeName;
+            }
+
+            Some(_) => {
+                let attribute = Attribute {
+                    name: String::new(),
+                    value: String::new(),
+                };
+                self.current_tag_token.add_attribute(attribute);
+                self.state = TokenizerState::AttributeName;
+                self.reconsume_char();
+            }
+        }
     }
+
 
     fn handle_attribute_name_state(&mut self) {
         // Implementation for Attribute name state
@@ -925,6 +1388,9 @@ impl<'a> Tokenizer<'a> {
     fn reconsume_char(&mut self) {        
         self.input_stream.idx -= 1;
         self.input_stream.idx = max(self.input_stream.idx, 0);
+    }
+    fn emit_parse_error(&self, err: &str){
+        eprint!("{err}\n");
     }
 }
 
