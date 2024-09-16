@@ -4,7 +4,7 @@ use std::cmp::max;
 
 #[derive(Debug, Clone)]
 pub enum Token {
-    Doctype {
+    DOCTYPE {
         name: Option<String>,
         public_id: Option<String>,
         system_id: Option<String>,
@@ -27,7 +27,7 @@ pub enum Token {
     Character {
         data: char,
     },
-    EndOfFile,
+    EOF,
 }
 impl Token {
     pub fn attribute_exists(&self, name: &str) -> bool {
@@ -261,7 +261,7 @@ impl<'a> Tokenizer<'a> {
                 self.emit_parse_error("unexpected-null-character");
                 self.emit_token(Token::Character{data: next_char.unwrap() as char});
             }
-            None => self.emit_token(Token::EndOfFile),
+            None => self.emit_token(Token::EOF),
             Some(ch) => self.emit_token(Token::Character{data: ch as char}), 
         }
     }
@@ -279,7 +279,7 @@ impl<'a> Tokenizer<'a> {
                 self.emit_parse_error("unexpected-null-character");
                 self.emit_token(Token::Character{data: '\u{FFFD}'}); //REPLACEMENT CHARACTER character token.
             }
-            None => self.emit_token(Token::EndOfFile), 
+            None => self.emit_token(Token::EOF), 
             Some(ch) => self.emit_token(Token::Character{data: ch as char}),
         }
     }
@@ -293,7 +293,7 @@ impl<'a> Tokenizer<'a> {
                 self.emit_parse_error("unexpected-null-character");
                 self.emit_token(Token::Character{data: '\u{FFFD}'});
             }
-            None => self.emit_token(Token::EndOfFile),
+            None => self.emit_token(Token::EOF),
             Some(ch) => self.emit_token(Token::Character{data: ch as char}),
         }
     }
@@ -307,7 +307,7 @@ impl<'a> Tokenizer<'a> {
                 self.emit_parse_error("unexpected-null-character");
                 self.emit_token(Token::Character{data: '\u{FFFD}'});
             }
-            None => self.emit_token(Token::EndOfFile),
+            None => self.emit_token(Token::EOF),
             Some(ch) => self.emit_token(Token::Character{data: ch as char}),
         }
     }
@@ -320,7 +320,7 @@ impl<'a> Tokenizer<'a> {
                 self.emit_parse_error("unexpected-null-character");
                 self.emit_token(Token::Character{data: '\u{FFFD}'});
             }
-            None => self.emit_token(Token::EndOfFile),
+            None => self.emit_token(Token::EOF),
             Some(ch) => self.emit_token(Token::Character{data: ch as char}),
         }
     }
@@ -349,7 +349,7 @@ impl<'a> Tokenizer<'a> {
             None => {
                 self.emit_parse_error(" eof-before-tag-name");
                 self.emit_token(Token::Character{data: '<'});
-                self.emit_token(Token::EndOfFile);
+                self.emit_token(Token::EOF);
             }
             Some(_) => {
                 self.emit_parse_error("invalid-first-character-of-tag-name");
@@ -381,7 +381,7 @@ impl<'a> Tokenizer<'a> {
                 self.emit_parse_error("eof-before-tag-name");
                 self.emit_token(Token::Character{data: '<'});
                 self.emit_token(Token::Character{data: '/'});
-                self.emit_token(Token::EndOfFile);
+                self.emit_token(Token::EOF);
             }
             Some(_) => {
                 self.emit_parse_error("invalid-first-character-of-tag-name");
@@ -421,7 +421,7 @@ impl<'a> Tokenizer<'a> {
             }
             None => {
                 self.emit_parse_error("Parse error: EOF in tag");
-                self.emit_token(Token::EndOfFile);
+                self.emit_token(Token::EOF);
             }
             Some(ch) => {
                 if let Some(Token::StartTag { tag_name, .. }) = self.current_tag_token.as_mut() {
@@ -801,7 +801,7 @@ impl<'a> Tokenizer<'a> {
     
             None => {
                 self.emit_parse_error("eof-in-script-html-comment-like-text");
-                self.emit_token(Token::EndOfFile);
+                self.emit_token(Token::EOF);
             }
     
             Some(ch) => {
@@ -833,7 +833,7 @@ impl<'a> Tokenizer<'a> {
             // Handling EOF
             None => {
                 self.emit_parse_error("eof-in-script-html-comment-like-text");
-                self.emit_token(Token::EndOfFile);
+                self.emit_token(Token::EOF);
             }
     
             Some(ch) => {
@@ -869,7 +869,7 @@ impl<'a> Tokenizer<'a> {
     
             None => {
                 self.emit_parse_error("eof-in-script-html-comment-like-text");
-                self.emit_token(Token::EndOfFile);
+                self.emit_token(Token::EOF);
             }
     
             Some(ch) => {
@@ -1044,7 +1044,7 @@ impl<'a> Tokenizer<'a> {
 
             None => {
                 self.emit_parse_error("eof-in-script-html-comment-like-text");
-                self.emit_token(Token::EndOfFile);
+                self.emit_token(Token::EOF);
             }
 
             Some(ch) => {
@@ -1076,7 +1076,7 @@ impl<'a> Tokenizer<'a> {
 
             None => {
                 self.emit_parse_error("eof-in-script-html-comment-like-text");
-                self.emit_token(Token::EndOfFile);
+                self.emit_token(Token::EOF);
             }
 
             Some(ch) => {
@@ -1113,7 +1113,7 @@ impl<'a> Tokenizer<'a> {
 
             None => {
                 self.emit_parse_error("eof-in-script-html-comment-like-text");
-                self.emit_token(Token::EndOfFile);
+                self.emit_token(Token::EOF);
             }
 
             Some(ch) => {
@@ -1171,7 +1171,7 @@ impl<'a> Tokenizer<'a> {
             }
         }
     }
-
+    //13.2.5.32 Before attribute name state
     fn handle_before_attribute_name_state(&mut self) {
         let next_char = self.consume_next_input_char();
 
@@ -1268,7 +1268,7 @@ impl<'a> Tokenizer<'a> {
                 self.add_attribute_to_current_tag_token();
 
                 self.emit_parse_error("eof-in-tag");
-                self.emit_token(Token::EndOfFile);
+                self.emit_token(Token::EOF);
             }
     
             Some(_) => {
@@ -1281,30 +1281,212 @@ impl<'a> Tokenizer<'a> {
         }
     }
     
-
+    //13.2.5.35 Before Attribute Value State
     fn handle_before_attribute_value_state(&mut self) {
-        // Implementation for Before attribute value state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+                // Ignore the character.
+            }
+            Some(b'"') => {
+                // Switch to the attribute value (double-quoted) state.
+                self.state = TokenizerState::AttributeValueDoubleQuoted;
+            }
+            Some(b'\'') => {
+                // Switch to the attribute value (single-quoted) state.
+                self.state = TokenizerState::AttributeValueSingleQuoted;
+            }
+            Some(b'>') => {
+                // Missing-attribute-value parse error.
+                self.emit_parse_error("missing-attribute-value");
+                self.state = TokenizerState::Data;
+                self.emit_current_tag_token();
+            }
+            Some(_) => {
+                // Reconsume in the attribute value (unquoted) state.
+                self.state = TokenizerState::AttributeValueUnquoted;
+                self.reconsume_char();
+            }
+            None => {
+                // Handle EOF if necessary
+            }
+        }
     }
-
+    
+    //13.2.5.36 Attribute Value (Double-Quoted) State
     fn handle_attribute_value_double_quoted_state(&mut self) {
-        // Implementation for Attribute value (double-quoted) state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'"') => {
+                // Switch to the after attribute value (quoted) state.
+                self.state = TokenizerState::AfterAttributeValueQuoted;
+            }
+            Some(b'&') => {
+                // Set the return state to the attribute value (double-quoted) state.
+                self.return_state = TokenizerState::AttributeValueDoubleQuoted;
+                // Switch to the character reference state.
+                self.state = TokenizerState::CharacterReference;
+            }
+            Some(b'\x00') => {
+                // Unexpected-null-character parse error.
+                self.emit_parse_error("unexpected-null-character");
+                // Append a U+FFFD REPLACEMENT CHARACTER character to the current attribute's value.
+                self.current_tag_value.push('\u{FFFD}');
+            }
+            Some(_) => {
+                // Append the current input character to the current attribute's value.
+                self.current_tag_value.push(next_char.unwrap() as char);
+            }
+            None => {
+                // eof-in-tag parse error.
+                self.emit_parse_error("eof-in-tag");
+                self.emit_token(Token::EOF);
+            }
+        }
     }
+    
 
+    //13.2.5.37 Attribute Value (Single-Quoted) State
     fn handle_attribute_value_single_quoted_state(&mut self) {
-        // Implementation for Attribute value (single-quoted) state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'\'') => {
+                // Switch to the after attribute value (quoted) state.
+                self.state = TokenizerState::AfterAttributeValueQuoted;
+            }
+            Some(b'&') => {
+                // Set the return state to the attribute value (single-quoted) state.
+                self.return_state = TokenizerState::AttributeValueSingleQuoted;
+                // Switch to the character reference state.
+                self.state = TokenizerState::CharacterReference;
+            }
+            Some(b'\x00') => {
+                // Unexpected-null-character parse error.
+                self.emit_parse_error("unexpected-null-character");
+                // Append a U+FFFD REPLACEMENT CHARACTER character to the current attribute's value.
+                self.current_tag_value.push('\u{FFFD}');
+            }
+            Some(_) => {
+                // Append the current input character to the current attribute's value.
+                self.current_tag_value.push(next_char.unwrap() as char);
+            }
+            None => {
+                // eof-in-tag parse error.
+                self.emit_parse_error("eof-in-tag");
+                self.emit_token(Token::EOF);
+            }
+        }
     }
+    
 
+    // 13.2.5.38 Attribute Value (Unquoted) State
     fn handle_attribute_value_unquoted_state(&mut self) {
-        // Implementation for Attribute value (unquoted) state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+                // Switch to the before attribute name state.
+                self.state = TokenizerState::BeforeAttributeName;
+            }
+            Some(b'&') => {
+                // Set the return state to the attribute value (unquoted) state.
+                self.return_state = TokenizerState::AttributeValueUnquoted;
+                // Switch to the character reference state.
+                self.state = TokenizerState::CharacterReference;
+            }
+            Some(b'>') => {
+                // Switch to the data state. Emit the current tag token.
+                self.state = TokenizerState::Data;
+                self.emit_current_tag_token();
+            }
+            Some(b'\x00') => {
+                // Unexpected-null-character parse error.
+                self.emit_parse_error("unexpected-null-character");
+                // Append a U+FFFD REPLACEMENT CHARACTER character to the current attribute's value.
+                self.current_tag_value.push('\u{FFFD}');
+            }
+            Some(b'"') | Some(b'\'') | Some(b'<') | Some(b'=') | Some(b'`') => {
+                // Unexpected-character-in-unquoted-attribute-value parse error.
+                self.emit_parse_error("unexpected-character-in-unquoted-attribute-value");
+                // Treat it as per the "anything else" entry below.
+                self.current_tag_value.push(next_char.unwrap() as char);
+            }
+            Some(_) => {
+                // Append the current input character to the current attribute's value.
+                self.current_tag_value.push(next_char.unwrap() as char);
+            }
+            None => {
+                // eof-in-tag parse error.
+                self.emit_parse_error("eof-in-tag");
+                self.emit_token(Token::EOF);
+            }
+        }
     }
+    
 
+    //13.2.5.39 After Attribute Value (Quoted) State
     fn handle_after_attribute_value_quoted_state(&mut self) {
-        // Implementation for After attribute value (quoted) state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+                // Switch to the before attribute name state.
+                self.state = TokenizerState::BeforeAttributeName;
+            }
+            Some(b'/') => {
+                // Switch to the self-closing start tag state.
+                self.state = TokenizerState::SelfClosingStartTag;
+            }
+            Some(b'>') => {
+                // Switch to the data state. Emit the current tag token.
+                self.state = TokenizerState::Data;
+                self.emit_current_tag_token();
+            }
+            Some(_) => {
+                // Missing-whitespace-between-attributes parse error.
+                self.emit_parse_error("missing-whitespace-between-attributes");
+                // Reconsume in the before attribute name state.
+                self.state = TokenizerState::BeforeAttributeName;
+                self.reconsume_char();
+            }
+            None => {
+                // eof-in-tag parse error.
+                self.emit_parse_error("eof-in-tag");
+                self.emit_token(Token::EOF);
+            }
+        }
     }
-
+    
+    //13.2.5.40 Self-Closing Start Tag State
     fn handle_self_closing_start_tag_state(&mut self) {
-        // Implementation for Self-closing start tag state
+        let next_char = self.consume_next_input_char(); 
+
+        match next_char {
+            Some(b'>') => {
+                // Set the self-closing flag of the current tag token.
+                self.current_tag_self_closing = true;
+                // Switch to the data state. Emit the current tag token.
+                self.state = TokenizerState::Data;
+                self.emit_current_tag_token();
+            }
+            Some(_) => {
+                // Unexpected-solidus-in-tag parse error.
+                self.emit_parse_error("unexpected-solidus-in-tag");
+                // Reconsume in the before attribute name state.
+                self.state = TokenizerState::BeforeAttributeName;
+                self.reconsume_char();
+            }
+            None => {
+                // eof-in-tag parse error.
+                self.emit_parse_error("eof-in-tag");
+                self.emit_token(Token::EOF);
+            }
+        }
     }
+    
 
     fn handle_bogus_comment_state(&mut self) {
         // Implementation for Bogus comment state
@@ -1485,7 +1667,7 @@ impl<'a> Tokenizer<'a> {
         byte_character
     }
 
-    fn reconsume_char(&mut self) {        
+    fn reconsume_char(&mut self) {       
         self.input_stream.idx -= 1;
         self.input_stream.idx = max(self.input_stream.idx, 0);
     }
