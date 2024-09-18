@@ -48,6 +48,14 @@ impl Token {
             _ => {}
         }
     }
+    pub fn set_self_closing_flag(&mut self, flag: bool) {
+        match self {
+            Token::StartTag {self_closing, .. } | Token::EndTag { self_closing, .. } => {
+                *self_closing = flag;
+            },
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -138,6 +146,8 @@ pub struct Tokenizer<'a> {
     state: TokenizerState,
     ret_state: TokenizerState,
     current_tag_token: Option<Token>,
+    current_comment_token: Option<Token>,
+    current_doctype_token: Option<Token>,
     tokens: Vec<Token>,
     temporary_buffer: String,
     last_start_tag_token: Option<Token> ,// this field is for end tag token validity check
@@ -152,6 +162,8 @@ impl<'a> Tokenizer<'a> {
             state: TokenizerState::Data,
             ret_state: TokenizerState::Data,
             current_tag_token: None,
+            current_comment_token: None,
+            current_doctype_token: None,
             tokens: Vec::new(),
             temporary_buffer: String::new(),
             last_start_tag_token: None,
@@ -342,7 +354,7 @@ impl<'a> Tokenizer<'a> {
             }
             Some(b'?') => {
                 self.emit_parse_error("unexpected-question-mark-instead-of-tag-name");
-                self.emit_token(Token::Comment{data:String::new()});
+                self.current_comment_token = Some(Token::Comment{data:String::new()});
                 self.state = TokenizerState::BogusComment;
                 self.reconsume_char();
             }
@@ -385,7 +397,7 @@ impl<'a> Tokenizer<'a> {
             }
             Some(_) => {
                 self.emit_parse_error("invalid-first-character-of-tag-name");
-                self.emit_token(Token::Comment{data:String::new()});
+                self.current_comment_token = Some(Token::Comment{data:String::new()});
                 self.state = TokenizerState::BogusComment;
                 self.reconsume_char();
             }
@@ -1287,29 +1299,25 @@ impl<'a> Tokenizer<'a> {
     
         match next_char {
             Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
-                // Ignore the character.
+
             }
             Some(b'"') => {
-                // Switch to the attribute value (double-quoted) state.
                 self.state = TokenizerState::AttributeValueDoubleQuoted;
             }
             Some(b'\'') => {
-                // Switch to the attribute value (single-quoted) state.
                 self.state = TokenizerState::AttributeValueSingleQuoted;
             }
             Some(b'>') => {
-                // Missing-attribute-value parse error.
                 self.emit_parse_error("missing-attribute-value");
                 self.state = TokenizerState::Data;
                 self.emit_current_tag_token();
             }
             Some(_) => {
-                // Reconsume in the attribute value (unquoted) state.
                 self.state = TokenizerState::AttributeValueUnquoted;
                 self.reconsume_char();
             }
             None => {
-                // Handle EOF if necessary
+
             }
         }
     }
@@ -1320,23 +1328,17 @@ impl<'a> Tokenizer<'a> {
     
         match next_char {
             Some(b'"') => {
-                // Switch to the after attribute value (quoted) state.
                 self.state = TokenizerState::AfterAttributeValueQuoted;
             }
             Some(b'&') => {
-                // Set the return state to the attribute value (double-quoted) state.
-                self.return_state = TokenizerState::AttributeValueDoubleQuoted;
-                // Switch to the character reference state.
+                self.ret_state = TokenizerState::AttributeValueDoubleQuoted;
                 self.state = TokenizerState::CharacterReference;
             }
             Some(b'\x00') => {
-                // Unexpected-null-character parse error.
                 self.emit_parse_error("unexpected-null-character");
-                // Append a U+FFFD REPLACEMENT CHARACTER character to the current attribute's value.
                 self.current_tag_value.push('\u{FFFD}');
             }
             Some(_) => {
-                // Append the current input character to the current attribute's value.
                 self.current_tag_value.push(next_char.unwrap() as char);
             }
             None => {
@@ -1354,27 +1356,20 @@ impl<'a> Tokenizer<'a> {
     
         match next_char {
             Some(b'\'') => {
-                // Switch to the after attribute value (quoted) state.
                 self.state = TokenizerState::AfterAttributeValueQuoted;
             }
             Some(b'&') => {
-                // Set the return state to the attribute value (single-quoted) state.
-                self.return_state = TokenizerState::AttributeValueSingleQuoted;
-                // Switch to the character reference state.
+                self.ret_state= TokenizerState::AttributeValueSingleQuoted;
                 self.state = TokenizerState::CharacterReference;
             }
             Some(b'\x00') => {
-                // Unexpected-null-character parse error.
                 self.emit_parse_error("unexpected-null-character");
-                // Append a U+FFFD REPLACEMENT CHARACTER character to the current attribute's value.
                 self.current_tag_value.push('\u{FFFD}');
             }
             Some(_) => {
-                // Append the current input character to the current attribute's value.
                 self.current_tag_value.push(next_char.unwrap() as char);
             }
             None => {
-                // eof-in-tag parse error.
                 self.emit_parse_error("eof-in-tag");
                 self.emit_token(Token::EOF);
             }
@@ -1388,38 +1383,28 @@ impl<'a> Tokenizer<'a> {
     
         match next_char {
             Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
-                // Switch to the before attribute name state.
                 self.state = TokenizerState::BeforeAttributeName;
             }
             Some(b'&') => {
-                // Set the return state to the attribute value (unquoted) state.
-                self.return_state = TokenizerState::AttributeValueUnquoted;
-                // Switch to the character reference state.
+                self.ret_state= TokenizerState::AttributeValueUnquoted;
                 self.state = TokenizerState::CharacterReference;
             }
             Some(b'>') => {
-                // Switch to the data state. Emit the current tag token.
                 self.state = TokenizerState::Data;
                 self.emit_current_tag_token();
             }
             Some(b'\x00') => {
-                // Unexpected-null-character parse error.
                 self.emit_parse_error("unexpected-null-character");
-                // Append a U+FFFD REPLACEMENT CHARACTER character to the current attribute's value.
                 self.current_tag_value.push('\u{FFFD}');
             }
             Some(b'"') | Some(b'\'') | Some(b'<') | Some(b'=') | Some(b'`') => {
-                // Unexpected-character-in-unquoted-attribute-value parse error.
                 self.emit_parse_error("unexpected-character-in-unquoted-attribute-value");
-                // Treat it as per the "anything else" entry below.
                 self.current_tag_value.push(next_char.unwrap() as char);
             }
             Some(_) => {
-                // Append the current input character to the current attribute's value.
                 self.current_tag_value.push(next_char.unwrap() as char);
             }
             None => {
-                // eof-in-tag parse error.
                 self.emit_parse_error("eof-in-tag");
                 self.emit_token(Token::EOF);
             }
@@ -1433,27 +1418,21 @@ impl<'a> Tokenizer<'a> {
     
         match next_char {
             Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
-                // Switch to the before attribute name state.
                 self.state = TokenizerState::BeforeAttributeName;
             }
             Some(b'/') => {
-                // Switch to the self-closing start tag state.
                 self.state = TokenizerState::SelfClosingStartTag;
             }
             Some(b'>') => {
-                // Switch to the data state. Emit the current tag token.
                 self.state = TokenizerState::Data;
                 self.emit_current_tag_token();
             }
             Some(_) => {
-                // Missing-whitespace-between-attributes parse error.
                 self.emit_parse_error("missing-whitespace-between-attributes");
-                // Reconsume in the before attribute name state.
                 self.state = TokenizerState::BeforeAttributeName;
                 self.reconsume_char();
             }
             None => {
-                // eof-in-tag parse error.
                 self.emit_parse_error("eof-in-tag");
                 self.emit_token(Token::EOF);
             }
@@ -1466,87 +1445,443 @@ impl<'a> Tokenizer<'a> {
 
         match next_char {
             Some(b'>') => {
-                // Set the self-closing flag of the current tag token.
-                self.current_tag_self_closing = true;
-                // Switch to the data state. Emit the current tag token.
+                if let Some(ref mut token) = self.current_tag_token {
+                    token.set_self_closing_flag(true);
+                }
                 self.state = TokenizerState::Data;
                 self.emit_current_tag_token();
             }
             Some(_) => {
-                // Unexpected-solidus-in-tag parse error.
                 self.emit_parse_error("unexpected-solidus-in-tag");
-                // Reconsume in the before attribute name state.
                 self.state = TokenizerState::BeforeAttributeName;
                 self.reconsume_char();
             }
             None => {
-                // eof-in-tag parse error.
                 self.emit_parse_error("eof-in-tag");
                 self.emit_token(Token::EOF);
             }
         }
     }
     
-
+    //13.2.5.41 Bogus Comment State
     fn handle_bogus_comment_state(&mut self) {
-        // Implementation for Bogus comment state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'>') => {
+                self.state = TokenizerState::Data;
+                self.emit_current_comment_token();
+            }
+            Some(b'\x00') => {
+                self.emit_parse_error("unexpected-null-character");
+                if let Some(Token::Comment { ref mut data,..}) = self.current_comment_token.as_mut() {
+                    data.push('\u{FFFD}'); 
+                }
+            }
+            Some(_) => {
+                if let Some(Token::Comment { ref mut data,..}) = self.current_comment_token.as_mut() {
+                    data.push(next_char.unwrap() as char); 
+                }
+            }
+            None => {
+                self.emit_current_comment_token();
+                self.emit_token(Token::EOF);
+            }
+        }
     }
-
+    
+    //13.2.5.42 Markup declaration open state
     fn handle_markup_declaration_open_state(&mut self) {
-        // Implementation for Markup declaration open state
+        if self.consume_if_expected(b"--", false) {
+            self.current_comment_token = Some(Token::Comment{data : String::new()});
+            self.state = TokenizerState::CommentStart;
+        } else if self.consume_if_expected(b"DOCTYPE", true) {
+            self.consume_next_input_char();
+            self.state = TokenizerState::DOCTYPE;
+        } else if self.consume_if_expected(b"[CDATA[", false) {
+            // NEED_IMPLEMENT_LATER
+            if true {
+                self.emit_parse_error("cdata-in-html-content");
+                self.current_comment_token = Some(Token::Comment{data : "[CDATA[".to_string()});
+                self.state = TokenizerState::BogusComment;
+            } else {
+                self.state = TokenizerState::CDATASection;
+            }
+        } else {
+            self.emit_parse_error("incorrectly-opened-comment");
+            self.current_comment_token = Some(Token::Comment{data : String::new()});
+            self.state = TokenizerState::BogusComment;
+        }
     }
-
+    
+    //13.2.5.43 Comment start state
     fn handle_comment_start_state(&mut self) {
-        // Implementation for Comment start state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'-') => {
+                self.state = TokenizerState::CommentStartDash;
+            }
+            Some(b'>') => {
+                self.emit_parse_error("abrupt-closing-of-empty-comment");
+                self.state = TokenizerState::Data;
+                self.emit_current_comment_token();
+            }
+            _ => {
+                // Reconsume in the comment state.
+                self.state = TokenizerState::Comment;
+                self.reconsume_char();
+            }
+        }
     }
-
+    
+    //13.2.5.44 Comment start dash state
     fn handle_comment_start_dash_state(&mut self) {
-        // Implementation for Comment start dash state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'-') => {
+                self.state = TokenizerState::CommentEnd;
+            }
+            Some(b'>') => {
+                self.emit_parse_error("abrupt-closing-of-empty-comment");
+                self.state = TokenizerState::Data;
+                self.emit_current_comment_token();
+            }
+            Some(_) => {
+                if let Some(Token::Comment { ref mut data,..}) = self.current_comment_token.as_mut() {
+                    data.push('-'); 
+                }
+                self.state = TokenizerState::Comment;
+                self.reconsume_char();
+            }
+            None => {
+                self.emit_parse_error("eof-in-comment");
+                self.emit_current_comment_token();
+                self.emit_token(Token::EOF);
+            }
+        }
     }
-
+    
+    //13.2.5.45 Comment state
     fn handle_comment_state(&mut self) {
-        // Implementation for Comment state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'<') => {
+                if let Some(Token::Comment { ref mut data,..}) = self.current_comment_token.as_mut() {
+                    data.push('<'); 
+                }
+                self.state = TokenizerState::CommentLessThanSign;
+            }
+            Some(b'-') => {
+                self.state = TokenizerState::CommentEndDash;
+            }
+            Some(b'\x00') => {
+                self.emit_parse_error("unexpected-null-character");
+                if let Some(Token::Comment { ref mut data,..}) = self.current_comment_token.as_mut() {
+                    data.push('\u{FFFD}'); 
+                }
+            }
+            Some(_) => {
+                if let Some(Token::Comment { ref mut data,..}) = self.current_comment_token.as_mut() {
+                    data.push(next_char.unwrap() as char); 
+                }
+            }
+            None => {
+                self.emit_parse_error("eof-in-comment");
+                self.emit_current_comment_token();
+                self.emit_token(Token::EOF);
+            }
+        }
     }
-
+    
+    //13.2.5.46 Comment less-than sign state
     fn handle_comment_less_than_sign_state(&mut self) {
-        // Implementation for Comment less-than sign state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'!') => {
+                if let Some(Token::Comment { ref mut data,..}) = self.current_comment_token.as_mut() {
+                    data.push('!'); 
+                }
+                self.state = TokenizerState::CommentLessThanSignBang;
+            }
+            Some(b'<') => {
+                if let Some(Token::Comment { ref mut data,..}) = self.current_comment_token.as_mut() {
+                    data.push('<'); 
+                }
+            }
+            _ => {
+                self.reconsume_char();
+                self.state = TokenizerState::Comment;
+            }
+        }
     }
-
+    //13.2.5.47 Comment less-than sign bang state
     fn handle_comment_less_than_sign_bang_state(&mut self) {
-        // Implementation for Comment less-than sign bang state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'-') => {
+                self.state = TokenizerState::CommentLessThanSignBangDash;
+            }
+            _ => {
+                self.reconsume_char();
+                self.state = TokenizerState::Comment;
+            }
+        }
     }
-
+    //13.2.5.48 Comment less-than sign bang dash state
     fn handle_comment_less_than_sign_bang_dash_state(&mut self) {
-        // Implementation for Comment less-than sign bang dash state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'-') => {
+                self.state = TokenizerState::CommentLessThanSignBangDashDash;
+            }
+            _ => {
+                self.reconsume_char();
+                self.state = TokenizerState::CommentEndDash;
+            }
+        }
     }
-
+    
+    //13.2.5.49 Comment less-than sign bang dash dash state
     fn handle_comment_less_than_sign_bang_dash_dash_state(&mut self) {
-        // Implementation for Comment less-than sign bang dash dash state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'>') | None => {
+                self.reconsume_char();
+                self.state = TokenizerState::CommentEnd;
+            }
+            Some(_) => {
+                self.emit_parse_error("nested-comment");
+                self.reconsume_char();
+                self.state = TokenizerState::CommentEnd;
+            }
+        }
     }
-
+    //13.2.5.50 Comment end dash state
     fn handle_comment_end_dash_state(&mut self) {
-        // Implementation for Comment end dash state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'-') => {
+                self.state = TokenizerState::CommentEnd;
+            }
+            Some(_) => {
+                if let Some(Token::Comment { ref mut data,..}) = self.current_comment_token.as_mut() {
+                    data.push('-'); 
+                }
+                self.reconsume_char();
+                self.state = TokenizerState::Comment;
+            }
+            None => {
+                self.emit_parse_error("eof-in-comment");
+                self.emit_current_comment_token();
+                self.emit_token(Token::EOF);
+            }
+        }
     }
+    
 
     fn handle_comment_end_state(&mut self) {
-        // Implementation for Comment end state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'>') => {
+                self.state = TokenizerState::Data;
+                self.emit_current_comment_token();
+            }
+            Some(b'!') => {
+                self.state = TokenizerState::CommentEndBang;
+            }
+            Some(b'-') => {
+                if let Some(Token::Comment { ref mut data, .. }) = self.current_comment_token.as_mut() {
+                    data.push('-');
+                }
+            }
+            Some(_) => {
+                if let Some(Token::Comment { ref mut data, .. }) = self.current_comment_token.as_mut() {
+                    data.push_str("--");
+                }
+                self.reconsume_char();
+                self.state = TokenizerState::Comment;
+            }
+            None => {
+                self.emit_parse_error("eof-in-comment");
+                self.emit_current_comment_token();
+                self.emit_token(Token::EOF);
+            }
+        }
     }
+    
 
     fn handle_comment_end_bang_state(&mut self) {
-        // Implementation for Comment end bang state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'-') => {
+                if let Some(Token::Comment { ref mut data, .. }) = self.current_comment_token.as_mut() {
+                    data.push_str("--!");
+                }
+                self.state = TokenizerState::CommentEndDash;
+            }
+            Some(b'>') => {
+                self.emit_parse_error("incorrectly-closed-comment");
+                self.state = TokenizerState::Data;
+                self.emit_current_comment_token();
+            }
+            Some(_) => {
+                if let Some(Token::Comment { ref mut data, .. }) = self.current_comment_token.as_mut() {
+                    data.push_str("--!");
+                }
+                self.reconsume_char();
+                self.state = TokenizerState::Comment;
+            }
+            None => {
+                self.emit_parse_error("eof-in-comment");
+                self.emit_current_comment_token();
+                self.emit_token(Token::EOF);
+            }
+        }
     }
+    
 
     fn handle_doctype_state(&mut self) {
-        // Implementation for DOCTYPE state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+                self.state = TokenizerState::BeforeDOCTYPEName;
+            }
+            Some(b'>') => {
+                self.reconsume_char();
+                self.state = TokenizerState::BeforeDOCTYPEName;
+            }
+            Some(_) => {
+                self.emit_parse_error("missing-whitespace-before-doctype-name");
+                self.reconsume_char();
+                self.state = TokenizerState::BeforeDOCTYPEName;
+            }
+            None => {
+                self.emit_parse_error("eof-in-doctype");
+                let token = Token::DOCTYPE {
+                    name: None,
+                    public_id: None,
+                    system_id: None,
+                    force_quirks: true,
+                };
+                self.emit_token(token);
+                self.emit_token(Token::EOF);
+            }
+        }
     }
+    
 
     fn handle_before_doctype_name_state(&mut self) {
-        // Implementation for Before DOCTYPE name state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+                // Ignore the character.
+            }
+            Some(c) if c.is_ascii_uppercase() => {
+                let name = (c as char).to_ascii_lowercase().to_string();
+                self.current_doctype_token = Some(Token::DOCTYPE {
+                    name: Some(name),
+                    public_id: None,
+                    system_id: None,
+                    force_quirks: false,
+                });
+                self.state = TokenizerState::DOCTYPEName;
+            }
+            Some(b'\x00') => {
+                self.emit_parse_error("unexpected-null-character");
+                self.current_doctype_token = Some(Token::DOCTYPE {
+                    name: Some("\u{FFFD}".to_string()),
+                    public_id: None,
+                    system_id: None,
+                    force_quirks: false,
+                });
+                self.state = TokenizerState::DOCTYPEName;
+            }
+            Some(b'>') => {
+                self.emit_parse_error("missing-doctype-name");
+                self.current_doctype_token = Some(Token::DOCTYPE {
+                    name: None,
+                    public_id: None,
+                    system_id: None,
+                    force_quirks: true,
+                });
+                self.state = TokenizerState::Data;
+                self.emit_current_doctype_token();
+            }
+            Some(c) => {
+                let name = (c as char).to_string();
+                self.current_doctype_token = Some(Token::DOCTYPE {
+                    name: Some(name),
+                    public_id: None,
+                    system_id: None,
+                    force_quirks: false,
+                });
+                self.state = TokenizerState::DOCTYPEName;
+            }
+            None => {
+                self.emit_parse_error("eof-in-doctype");
+                let token = Token::DOCTYPE {
+                    name: None,
+                    public_id: None,
+                    system_id: None,
+                    force_quirks: true,
+                };
+                self.emit_token(token);
+                self.emit_token(Token::EOF);
+            }
+        }
     }
+    
 
     fn handle_doctype_name_state(&mut self) {
-        // Implementation for DOCTYPE name state
+        let next_char = self.consume_next_input_char();
+    
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+                self.state = TokenizerState::AfterDOCTYPEName;
+            }
+            Some(b'>') => {
+                self.state = TokenizerState::Data;
+                self.emit_current_doctype_token();
+            }
+            Some(c) if c.is_ascii_uppercase() => {
+                if let Some(Token::DOCTYPE { ref mut name, .. }) = self.current_doctype_token.as_mut() {
+                    name.as_mut().unwrap().push((c as char).to_ascii_lowercase());
+                }
+            }
+            Some(b'\x00') => {
+                self.emit_parse_error("unexpected-null-character");
+                if let Some(Token::DOCTYPE { ref mut name, .. }) = self.current_doctype_token.as_mut() {
+                    name.as_mut().unwrap().push('\u{FFFD}');
+                }
+            }
+            Some(c) => {
+                if let Some(Token::DOCTYPE { ref mut name, .. }) = self.current_doctype_token.as_mut() {
+                    name.as_mut().unwrap().push(c as char);
+                }
+            }
+            None => {
+                self.emit_parse_error("eof-in-doctype");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.emit_current_doctype_token();
+                self.emit_token(Token::EOF);
+            }
+        }
     }
+    
 
     fn handle_after_doctype_name_state(&mut self) {
         // Implementation for After DOCTYPE name state
@@ -1666,6 +2001,19 @@ impl<'a> Tokenizer<'a> {
         self.input_stream.advance();
         byte_character
     }
+    fn consume_if_expected(&mut self, expect: &[u8], ascii_insensitive : bool) -> bool{
+        if !ascii_insensitive{
+            self.input_stream.expect_many_and_skip(expect)
+        } else{
+            let strSlice = self.input_stream.slice_from_idx(expect.len());
+            let result = expect.iter().map(|c| c.to_ascii_lowercase())
+                .eq(strSlice.iter().map(|c| c.to_ascii_lowercase()));
+            if result {
+                self.input_stream.idx += expect.len();
+            }
+            result
+        }
+    }
 
     fn reconsume_char(&mut self) {       
         self.input_stream.idx -= 1;
@@ -1703,6 +2051,20 @@ impl<'a> Tokenizer<'a> {
     fn emit_current_tag_token(&mut self) {
 
         if let Some(token) = self.current_tag_token.take() { 
+            self.emit_token(token); 
+        } else {
+            eprintln!("No current tag token to emit.");
+        }
+    }
+    fn emit_current_comment_token(&mut self){
+        if let Some(token) = self.current_comment_token.take() { 
+            self.emit_token(token); 
+        } else {
+            eprintln!("No current tag token to emit.");
+        }
+    }
+    fn emit_current_doctype_token(&mut self){
+        if let Some(token) = self.current_doctype_token.take() { 
             self.emit_token(token); 
         } else {
             eprintln!("No current tag token to emit.");
