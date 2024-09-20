@@ -232,10 +232,10 @@ impl<'a> Tokenizer<'a> {
                     TokenizerState::DOCTYPEName => self.handle_doctype_name_state(),
                     TokenizerState::AfterDOCTYPEName => self.handle_after_doctype_name_state(),
                     TokenizerState::AfterDOCTYPEPublicKeyword => self.handle_after_doctype_public_keyword_state(),
-                    TokenizerState::BeforeDOCTYPEPublicIdentifier => self.handle_before_doctype_public_identifier_state(),
-                    TokenizerState::DOCTYPEPublicIdentifierDoubleQuoted => self.handle_doctype_public_identifier_double_quoted_state(),
-                    TokenizerState::DOCTYPEPublicIdentifierSingleQuoted => self.handle_doctype_public_identifier_single_quoted_state(),
-                    TokenizerState::AfterDOCTYPEPublicIdentifier => self.handle_after_doctype_public_identifier_state(),
+                    TokenizerState::BeforeDOCTYPEPublicIdentifier => self.handle_before_doctype_public_id_state(),
+                    TokenizerState::DOCTYPEPublicIdentifierDoubleQuoted => self.handle_doctype_public_id_double_quoted_state(),
+                    TokenizerState::DOCTYPEPublicIdentifierSingleQuoted => self.handle_doctype_public_id_single_quoted_state(),
+                    TokenizerState::AfterDOCTYPEPublicIdentifier => self.handle_after_doctype_public_id_state(),
                     TokenizerState::BetweenDOCTYPEPublicAndSystemIdentifiers => self.handle_between_doctype_public_and_system_identifiers_state(),
                     TokenizerState::AfterDOCTYPESystemKeyword => self.handle_after_doctype_system_keyword_state(),
                     TokenizerState::BeforeDOCTYPESystemIdentifier => self.handle_before_doctype_system_identifier_state(),
@@ -1687,6 +1687,7 @@ impl<'a> Tokenizer<'a> {
     }
     
 
+    //13.2.5.51 Comment end state
     fn handle_comment_end_state(&mut self) {
         let next_char = self.consume_next_input_char();
     
@@ -1719,6 +1720,7 @@ impl<'a> Tokenizer<'a> {
     }
     
 
+    //13.2.5.52 Comment end bang state
     fn handle_comment_end_bang_state(&mut self) {
         let next_char = self.consume_next_input_char();
     
@@ -1749,7 +1751,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
     
-
+    //13.2.5.53 DOCTYPE state
     fn handle_doctype_state(&mut self) {
         let next_char = self.consume_next_input_char();
     
@@ -1780,13 +1782,12 @@ impl<'a> Tokenizer<'a> {
         }
     }
     
-
+    //13.2.5.54 Before DOCTYPE name state
     fn handle_before_doctype_name_state(&mut self) {
         let next_char = self.consume_next_input_char();
     
         match next_char {
             Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
-                // Ignore the character.
             }
             Some(c) if c.is_ascii_uppercase() => {
                 let name = (c as char).to_ascii_lowercase().to_string();
@@ -1843,7 +1844,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
     
-
+    //13.2.5.55 DOCTYPE name state
     fn handle_doctype_name_state(&mut self) {
         let next_char = self.consume_next_input_char();
     
@@ -1882,46 +1883,433 @@ impl<'a> Tokenizer<'a> {
         }
     }
     
-
+    // 13.2.5.56 After DOCTYPE name state
     fn handle_after_doctype_name_state(&mut self) {
-        // Implementation for After DOCTYPE name state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\x09') | Some(b'\x0A') | Some(b'\x0C') | Some(b'\x20') => {
+            }
+            Some(b'>') => {
+                self.state = TokenizerState::Data;
+                self.emit_current_doctype_token();
+            }
+            None => {
+                self.emit_parse_error("eof-in-doctype");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.emit_current_doctype_token();
+                self.emit_token(Token::EOF);
+            }
+            Some(_) => {
+                if self.consume_if_expected(b"PUBLIC", true) {
+                    self.state = TokenizerState::AfterDOCTYPEPublicKeyword;
+                } else if self.consume_if_expected(b"SYSTEM", true) {
+                    self.state = TokenizerState::AfterDOCTYPESystemKeyword;
+                } else {
+                    self.emit_parse_error("invalid-character-sequence-after-doctype-name");
+                    if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                        *force_quirks = true;
+                    }
+                    self.reconsume_char();
+                    self.state = TokenizerState::BogusDOCTYPE;
+                }
+            }
+        }
     }
 
+    // 13.2.5.57 After DOCTYPE public keyword state
     fn handle_after_doctype_public_keyword_state(&mut self) {
-        // Implementation for After DOCTYPE public keyword state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\x09') | Some(b'\x0A') | Some(b'\x0C') | Some(b'\x20') => {
+                self.state = TokenizerState::BeforeDOCTYPEPublicIdentifier;
+            }
+            Some(b'"') => {
+                self.emit_parse_error("missing-whitespace-after-doctype-public-keyword");
+                if let Some(Token::DOCTYPE { ref mut public_id, .. }) = self.current_doctype_token.as_mut() {
+                    *public_id = Some(String::new());
+                }
+                self.state = TokenizerState::DOCTYPEPublicIdentifierDoubleQuoted;
+            }
+            Some(b'\'') => {
+                self.emit_parse_error("missing-whitespace-after-doctype-public-keyword");
+                if let Some(Token::DOCTYPE { ref mut public_id, .. }) = self.current_doctype_token.as_mut() {
+                    *public_id = Some(String::new()); 
+                }
+                self.state = TokenizerState::DOCTYPEPublicIdentifierSingleQuoted;
+            }
+            Some(b'>') => {
+                self.emit_parse_error("missing-doctype-public-identifier");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.state = TokenizerState::Data;
+                self.emit_current_doctype_token();
+            }
+            None => {
+                self.emit_parse_error("eof-in-doctype");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.emit_current_doctype_token();
+                self.emit_token(Token::EOF);
+            }
+            Some(_) => {
+                self.emit_parse_error("missing-quote-before-doctype-public-identifier");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.reconsume_char();
+                self.state = TokenizerState::BogusDOCTYPE;
+            }
+        }
     }
 
-    fn handle_before_doctype_public_identifier_state(&mut self) {
-        // Implementation for Before DOCTYPE public identifier state
+    // 13.2.5.58 Before DOCTYPE public identifier state
+    fn handle_before_doctype_public_id_state(&mut self) {
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\x09') | Some(b'\x0A') | Some(b'\x0C') | Some(b'\x20') => {}
+            Some(b'"') => {
+                if let Some(Token::DOCTYPE { ref mut public_id, .. }) = self.current_doctype_token.as_mut() {
+                    *public_id = Some(String::new()); 
+                }
+                self.state = TokenizerState::DOCTYPEPublicIdentifierDoubleQuoted;
+            }
+            Some(b'\'') => {
+                if let Some(Token::DOCTYPE { ref mut public_id, .. }) = self.current_doctype_token.as_mut() {
+                    *public_id = Some(String::new()); 
+                }
+                self.state = TokenizerState::DOCTYPEPublicIdentifierSingleQuoted;
+            }
+            Some(b'>') => {
+                self.emit_parse_error("missing-doctype-public-identifier");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.state = TokenizerState::Data;
+                self.emit_current_doctype_token();
+            }
+            None => {
+                self.emit_parse_error("eof-in-doctype");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.emit_current_doctype_token();
+                self.emit_token(Token::EOF);
+            }
+            Some(_) => {
+                self.emit_parse_error("missing-quote-before-doctype-public-identifier");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.reconsume_char();
+                self.state = TokenizerState::BogusDOCTYPE;
+            }
+        }
     }
 
-    fn handle_doctype_public_identifier_double_quoted_state(&mut self) {
-        // Implementation for DOCTYPE public identifier (double-quoted) state
+    // 13.2.5.59 DOCTYPE public identifier (double-quoted) state
+    fn handle_doctype_public_id_double_quoted_state(&mut self) {
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'"') => {
+                self.state = TokenizerState::AfterDOCTYPEPublicIdentifier;
+            }
+            Some(b'\x00') => {
+                self.emit_parse_error("unexpected-null-character");
+                if let Some(Token::DOCTYPE { ref mut public_id, .. }) = self.current_doctype_token.as_mut() {
+                    public_id.as_mut().unwrap().push('\u{FFFD}'); 
+                }
+            }
+            Some(b'>') => {
+                self.emit_parse_error("abrupt-doctype-public-identifier");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.state = TokenizerState::Data;
+                self.emit_current_doctype_token();
+            }
+            None => {
+                self.emit_parse_error("eof-in-doctype");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.emit_current_doctype_token();
+                self.emit_token(Token::EOF);
+            }
+            Some(_) => {
+                if let Some(Token::DOCTYPE { ref mut public_id, .. }) = self.current_doctype_token.as_mut() {
+                    public_id.as_mut().unwrap().push('\u{FFFD}'); 
+                }
+            }
+        }
     }
 
-    fn handle_doctype_public_identifier_single_quoted_state(&mut self) {
-        // Implementation for DOCTYPE public identifier (single-quoted) state
+    // 13.2.5.60 DOCTYPE public identifier (single-quoted) state
+    fn handle_doctype_public_id_single_quoted_state(&mut self) {
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\'') => {
+                self.state = TokenizerState::AfterDOCTYPEPublicIdentifier;
+            }
+            Some(b'\x00') => {
+                self.emit_parse_error("unexpected-null-character");
+                if let Some(Token::DOCTYPE { ref mut public_id, .. }) = self.current_doctype_token.as_mut() {
+                    public_id.as_mut().unwrap().push('\u{FFFD}'); 
+                }
+            }
+            Some(b'>') => {
+                self.emit_parse_error("abrupt-doctype-public-identifier");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.state = TokenizerState::Data;
+                self.emit_current_doctype_token();
+            }
+            None => {
+                self.emit_parse_error("eof-in-doctype");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.emit_current_doctype_token();
+                self.emit_token(Token::EOF);
+            }
+            Some(_) => {
+                if let Some(Token::DOCTYPE { ref mut public_id, .. }) = self.current_doctype_token.as_mut() {
+                    public_id.as_mut().unwrap().push('\u{FFFD}'); 
+                }
+            }
+        }
     }
 
-    fn handle_after_doctype_public_identifier_state(&mut self) {
-        // Implementation for After DOCTYPE public identifier state
+
+    // 13.2.5.61 After DOCTYPE public identifier state
+    fn handle_after_doctype_public_id_state(&mut self) {
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+                self.state = TokenizerState::BetweenDOCTYPEPublicAndSystemIdentifiers;
+            }
+            Some(b'>') => {
+                self.state = TokenizerState::Data;
+                self.emit_current_doctype_token();
+            }
+            Some(b'"') => {
+                self.emit_parse_error("missing-whitespace-between-doctype-public-and-system-identifiers");
+                if let Some(Token::DOCTYPE { ref mut system_id, .. }) = self.current_doctype_token.as_mut() {
+                    *system_id = Some(String::new());
+                }
+                self.state = TokenizerState::DOCTYPESystemIdentifierDoubleQuoted;
+            }
+            Some(b'\'') => {
+                self.emit_parse_error("missing-whitespace-between-doctype-public-and-system-identifiers");
+                if let Some(Token::DOCTYPE { ref mut system_id, .. }) = self.current_doctype_token.as_mut() {
+                    *system_id = Some(String::new());
+                }
+                self.state = TokenizerState::DOCTYPESystemIdentifierSingleQuoted;
+            }
+            None => {
+                self.emit_parse_error("eof-in-doctype");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.emit_current_doctype_token();
+                self.emit_token(Token::EOF);
+            }
+            _ => {
+                self.emit_parse_error("missing-quote-before-doctype-system-identifier");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.reconsume_char();
+                self.state = TokenizerState::BogusDOCTYPE;
+            }
+        }
     }
 
+    // 13.2.5.62 Between DOCTYPE public and system identifiers state
     fn handle_between_doctype_public_and_system_identifiers_state(&mut self) {
-        // Implementation for Between DOCTYPE public and system identifiers state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+            }
+            Some(b'>') => {
+                self.state = TokenizerState::Data;
+                self.emit_current_doctype_token();
+            }
+            Some(b'"') => {
+                if let Some(Token::DOCTYPE { ref mut system_id, .. }) = self.current_doctype_token.as_mut() {
+                    *system_id = Some(String::new());
+                }
+                self.state = TokenizerState::DOCTYPESystemIdentifierDoubleQuoted;
+            }
+            Some(b'\'') => {
+                if let Some(Token::DOCTYPE { ref mut system_id, .. }) = self.current_doctype_token.as_mut() {
+                    *system_id = Some(String::new());
+                }
+                self.state = TokenizerState::DOCTYPESystemIdentifierSingleQuoted;
+            }
+            None => {
+                self.emit_parse_error("eof-in-doctype");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.emit_current_doctype_token();
+                self.emit_token(Token::EOF);
+            }
+            _ => {
+                self.emit_parse_error("missing-quote-before-doctype-system-identifier");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.reconsume_char();
+                self.state = TokenizerState::BogusDOCTYPE;
+            }
+        }
     }
 
+    // 13.2.5.63 After DOCTYPE system keyword state
     fn handle_after_doctype_system_keyword_state(&mut self) {
-        // Implementation for After DOCTYPE system keyword state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+                self.state = TokenizerState::BeforeDOCTYPESystemIdentifier;
+            }
+            Some(b'"') => {
+                self.emit_parse_error("missing-whitespace-after-doctype-system-keyword");
+                if let Some(Token::DOCTYPE { ref mut system_id, .. }) = self.current_doctype_token.as_mut() {
+                    *system_id = Some(String::new());
+                }
+                self.state = TokenizerState::DOCTYPESystemIdentifierDoubleQuoted;
+            }
+            Some(b'\'') => {
+                self.emit_parse_error("missing-whitespace-after-doctype-system-keyword");
+                if let Some(Token::DOCTYPE { ref mut system_id, .. }) = self.current_doctype_token.as_mut() {
+                    *system_id = Some(String::new());
+                }
+                self.state = TokenizerState::DOCTYPESystemIdentifierSingleQuoted;
+            }
+            Some(b'>') => {
+                self.emit_parse_error("missing-doctype-system-identifier");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.state = TokenizerState::Data;
+                self.emit_current_doctype_token();
+            }
+            None => {
+                self.emit_parse_error("eof-in-doctype");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.emit_current_doctype_token();
+                self.emit_token(Token::EOF);
+            }
+            _ => {
+                self.emit_parse_error("missing-quote-before-doctype-system-identifier");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.reconsume_char();
+                self.state = TokenizerState::BogusDOCTYPE;
+            }
+        }
     }
 
+    // 13.2.5.64 Before DOCTYPE system identifier state
     fn handle_before_doctype_system_identifier_state(&mut self) {
-        // Implementation for Before DOCTYPE system identifier state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'\t') | Some(b'\n') | Some(b'\x0C') | Some(b' ') => {
+            }
+            Some(b'"') => {
+                if let Some(Token::DOCTYPE { ref mut system_id, .. }) = self.current_doctype_token.as_mut() {
+                    *system_id = Some(String::new());
+                }
+                self.state = TokenizerState::DOCTYPESystemIdentifierDoubleQuoted;
+            }
+            Some(b'\'') => {
+                if let Some(Token::DOCTYPE { ref mut system_id, .. }) = self.current_doctype_token.as_mut() {
+                    *system_id = Some(String::new());
+                }
+                self.state = TokenizerState::DOCTYPESystemIdentifierSingleQuoted;
+            }
+            Some(b'>') => {
+                self.emit_parse_error("missing-doctype-system-identifier");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.state = TokenizerState::Data;
+                self.emit_current_doctype_token();
+            }
+            None => {
+                self.emit_parse_error("eof-in-doctype");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.emit_current_doctype_token();
+                self.emit_token(Token::EOF);
+            }
+            _ => {
+                self.emit_parse_error("missing-quote-before-doctype-system-identifier");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.reconsume_char();
+                self.state = TokenizerState::BogusDOCTYPE;
+            }
+        }
     }
 
+    // 13.2.5.65 DOCTYPE system identifier (double-quoted) state
     fn handle_doctype_system_identifier_double_quoted_state(&mut self) {
-        // Implementation for DOCTYPE system identifier (double-quoted) state
+        let next_char = self.consume_next_input_char();
+
+        match next_char {
+            Some(b'"') => {
+                self.state = TokenizerState::AfterDOCTYPESystemIdentifier;
+            }
+            Some(b'\0') => {
+                self.emit_parse_error("unexpected-null-character");
+                if let Some(Token::DOCTYPE { ref mut system_id, .. }) = self.current_doctype_token.as_mut() {
+                    system_id.as_mut().unwrap().push('\u{FFFD}');
+                }
+            }
+            Some(b'>') => {
+                self.emit_parse_error("abrupt-doctype-system-identifier");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.state = TokenizerState::Data;
+                self.emit_current_doctype_token();
+            }
+            None => {
+                self.emit_parse_error("eof-in-doctype");
+                if let Some(Token::DOCTYPE { ref mut force_quirks, .. }) = self.current_doctype_token.as_mut() {
+                    *force_quirks = true;
+                }
+                self.emit_current_doctype_token();
+                self.emit_token(Token::EOF);
+            }
+            Some(_) => {
+                if let Some(Token::DOCTYPE { ref mut system_id, .. }) = self.current_doctype_token.as_mut() {
+                    system_id.as_mut().unwrap().push(next_char.unwrap() as char);
+                }
+            }
+        }
     }
+
 
     fn handle_doctype_system_identifier_single_quoted_state(&mut self) {
         // Implementation for DOCTYPE system identifier (single-quoted) state

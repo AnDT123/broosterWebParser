@@ -41,6 +41,20 @@ impl<'a, T: Eq + Copy> Stream<'a, T> {
 
         None
     }
+    pub fn expect_many_and_skip(&mut self, expect: &[T]) -> bool {
+        if self.data.len() < self.idx + expect.len() {
+            return false;
+        }
+
+        for (i, expected) in expect.iter().enumerate() {
+            if self.data[self.idx + i] != *expected {
+                return false;
+            }
+        }
+
+        self.idx += expect.len();
+        true
+    }
 
     /// Same as expect_and_skip, but returns a bool
     #[inline]
@@ -107,5 +121,9 @@ impl<'a, T> Stream<'a, T> {
     #[inline]
     pub fn slice_len(&self, from: usize, len: usize) -> &'a [T] {
         self.slice_checked(from, self.idx + len)
+    }
+    #[inline]
+    pub fn slice_from_idx(&self, len: usize) -> &'a [T] {
+        self.slice_checked(self.idx, self.idx + len)
     }
 }
