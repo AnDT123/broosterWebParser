@@ -1,7 +1,8 @@
 use crate::helper::stream::Stream;
 use std::cmp::max;
 use std::collections::VecDeque;
-
+use crate::dom::entities::ENTITIES;
+use crate::dom::entities::Entity;
 #[derive(Debug, Clone)]
 pub enum Token {
     DOCTYPE {
@@ -140,6 +141,35 @@ pub enum TokenizerState {
     DecimalCharacterReference,
     NumericCharacterReferenceEnd,
 }
+const CONTROL_CHARACTER_REPLACEMENTS: &[(u32, u32)] = &[
+    (0x80, 0x20AC), // EURO SIGN (€)
+    (0x82, 0x201A), // SINGLE LOW-9 QUOTATION MARK (‚)
+    (0x83, 0x0192), // LATIN SMALL LETTER F WITH HOOK (ƒ)
+    (0x84, 0x201E), // DOUBLE LOW-9 QUOTATION MARK („)
+    (0x85, 0x2026), // HORIZONTAL ELLIPSIS (…)
+    (0x86, 0x2020), // DAGGER (†)
+    (0x87, 0x2021), // DOUBLE DAGGER (‡)
+    (0x88, 0x02C6), // MODIFIER LETTER CIRCUMFLEX ACCENT (ˆ)
+    (0x89, 0x2030), // PER MILLE SIGN (‰)
+    (0x8A, 0x0160), // LATIN CAPITAL LETTER S WITH CARON (Š)
+    (0x8B, 0x2039), // SINGLE LEFT-POINTING ANGLE QUOTATION MARK (‹)
+    (0x8C, 0x0152), // LATIN CAPITAL LIGATURE OE (Œ)
+    (0x8E, 0x017D), // LATIN CAPITAL LETTER Z WITH CARON (Ž)
+    (0x91, 0x2018), // LEFT SINGLE QUOTATION MARK (‘)
+    (0x92, 0x2019), // RIGHT SINGLE QUOTATION MARK (’)
+    (0x93, 0x201C), // LEFT DOUBLE QUOTATION MARK (“)
+    (0x94, 0x201D), // RIGHT DOUBLE QUOTATION MARK (”)
+    (0x95, 0x2022), // BULLET (•)
+    (0x96, 0x2013), // EN DASH (–)
+    (0x97, 0x2014), // EM DASH (—)
+    (0x98, 0x02DC), // SMALL TILDE (˜)
+    (0x99, 0x2122), // TRADE MARK SIGN (™)
+    (0x9A, 0x0161), // LATIN SMALL LETTER S WITH CARON (š)
+    (0x9B, 0x203A), // SINGLE RIGHT-POINTING ANGLE QUOTATION MARK (›)
+    (0x9C, 0x0153), // LATIN SMALL LIGATURE OE (œ)
+    (0x9E, 0x017E), // LATIN SMALL LETTER Z WITH CARON (ž)
+    (0x9F, 0x0178), // LATIN CAPITAL LETTER Y WITH DIAERESIS (Ÿ)
+];
 pub struct Tokenizer<'a> {
     input_stream: Stream<'a, u8>,
     state: TokenizerState,
@@ -152,6 +182,7 @@ pub struct Tokenizer<'a> {
     last_start_tag_token: Option<Token>, // this field is for end tag token validity check
     current_tag_name: String,            //remember to clear after put into current_tag_token
     current_tag_value: String,           //same as above
+    character_reference_code: u32,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -168,6 +199,7 @@ impl<'a> Tokenizer<'a> {
             last_start_tag_token: None,
             current_tag_name: String::new(),
             current_tag_value: String::new(),
+            character_reference_code: 0,
         }
     }
 
@@ -2792,56 +2824,195 @@ impl<'a> Tokenizer<'a> {
                 self.state = TokenizerState::NumericCharacterReference;
             }
             _ => {
-                match self.ret_state {
-                    TokenizerState::AttributeValueDoubleQuoted | TokenizerState::AttributeValueSingleQuoted 
-                    |  TokenizerState::AttributeValueUnquoted => {
-                        self.current_tag_value.push_str(self.temporary_buffer.as_str());
-                    } 
-                    _ => {
-                        let chars: Vec<char> = self.temporary_buffer.chars().collect();
-                        for ch in chars {
-                            self.emit_token(Token::Character { data: ch });
-                        }
-                    }
-                }
-                self.temporary_buffer.clear();
-                self.reconsume_char();
-                self.state = self.ret_state.clone();
+                self.flush_code_points_consumed_as_a_character_references();
 
             }
         }
     }
     //13.2.5.73 Named character reference state
     fn handle_named_character_reference_state(&mut self) {
-        // Implementation for Named character reference state
+        let mut matchResult:Option<&Entity> = None;
+        self.temporary_buffer.clear();
+        while true {
+            let next_char = self.consume_next_input_char();
+            self.temporary_buffer.push(next_char.unwrap() as char);
+            if let Some(entity) = ENTITIES.get(&self.temporary_buffer) {
+                matchResult = Some(entity);
+            } else if !ENTITIES.keys().any(|k| k.starts_with(&self.temporary_buffer)){
+                self.temporary_buffer.pop();
+                self.reconsume_char();
+                break;
+            }          
+        }
+        match matchResult{
+            Some(E) => {
+                let next_char = self.consume_next_input_char().unwrap() as char ;
+                let last_character_match = self.temporary_buffer.chars().last().unwrap();
+                if (self.ret_state == TokenizerState::AttributeValueDoubleQuoted
+                    || self.ret_state == TokenizerState::AttributeValueSingleQuoted
+                    || self.ret_state == TokenizerState::AttributeValueUnquoted)
+                    && last_character_match != ';'
+                    && (next_char == '=' || next_char.is_alphanumeric()) 
+                {
+                    self.flush_code_points_consumed_as_a_character_references();
+                } else {
+                    if last_character_match != ';' {
+                        self.emit_parse_error("missing-semicolon-after-character-reference");
+                    }
+                    self.temporary_buffer.push_str(&E.characters);
+            
+                    self.flush_code_points_consumed_as_a_character_references();
+                }
+            }
+            None => {
+                self.flush_code_points_consumed_as_a_character_references();
+                self.state = TokenizerState::AmbiguousAmpersand;
+            }
+        }
+        
     }
-
+    //13.2.5.74 Ambiguous ampersand state
     fn handle_ambiguous_ampersand_state(&mut self) {
-        // Implementation for Ambiguous ampersand state
+        let next_char = self.consume_next_input_char();
+        match next_char {
+            Some(c) if c.is_ascii_alphanumeric() => {
+                if self.ret_state == TokenizerState::AttributeValueDoubleQuoted ||
+                    self.ret_state == TokenizerState::AttributeValueSingleQuoted ||
+                    self.ret_state == TokenizerState::AttributeValueUnquoted {
+                    self.current_tag_value.push(c as char);
+                } else {
+                    self.emit_token(Token::Character { data: c as char });
+                }
+            }
+            Some(b';') => {
+                self.emit_parse_error("unknown-named-character-reference");
+                self.reconsume_char();
+                self.state = self.ret_state.clone();
+            }
+            _ => {
+                self.reconsume_char();
+                self.state = self.ret_state.clone();
+            }
+        }
     }
-
+    
+    //13.2.5.75 Numeric character reference state
     fn handle_numeric_character_reference_state(&mut self) {
-        // Implementation for Numeric character reference state
+        self.character_reference_code = 0; 
+        let next_char = self.consume_next_input_char().unwrap();
+    
+        match next_char {
+            b'x' | b'X' => {
+                self.temporary_buffer.push(next_char as char); 
+                self.state = TokenizerState::HexadecimalCharacterReferenceStart;
+            }
+            _ => {
+                self.reconsume_char(); 
+                self.state = TokenizerState::DecimalCharacterReferenceStart;
+            }
+        }
     }
-
+    //13.2.5.76 Hexadecimal character reference start state
     fn handle_hexadecimal_character_reference_start_state(&mut self) {
-        // Implementation for Hexadecimal character reference start state
+        let next_char = self.consume_next_input_char().unwrap();
+    
+        if next_char.is_ascii_hexdigit() {
+            self.reconsume_char(); 
+            self.state = TokenizerState::HexadecimalCharacterReference;
+        } else {
+            self.emit_parse_error("absence-of-digits-in-numeric-character-reference");
+            self.flush_code_points_consumed_as_a_character_references();
+        }
     }
-
+    
+    //13.2.5.77 Decimal character reference start state
     fn handle_decimal_character_reference_start_state(&mut self) {
-        // Implementation for Decimal character reference start state
+        let next_char = self.consume_next_input_char().unwrap();
+    
+        if next_char.is_ascii_digit() {
+            self.reconsume_char();
+            self.state = TokenizerState::DecimalCharacterReference;
+        } else {
+            self.emit_parse_error("absence-of-digits-in-numeric-character-reference");
+            self.flush_code_points_consumed_as_a_character_references();
+        }
     }
-
+    
+    //13.2.5.78 Hexadecimal character reference state
     fn handle_hexadecimal_character_reference_state(&mut self) {
-        // Implementation for Hexadecimal character reference state
-    }
+        let next_char = self.consume_next_input_char().unwrap();
 
-    fn handle_decimal_character_reference_state(&mut self) {
-        // Implementation for Decimal character reference state
+        match next_char {
+            b'0'..=b'9' => {
+                self.character_reference_code = self.character_reference_code * 16 + (next_char - b'0') as u32;
+            }
+            b'A'..=b'F' => {
+                self.character_reference_code = self.character_reference_code * 16 + (next_char - 0x37) as u32;
+            }
+            b'a'..=b'f' => {
+                self.character_reference_code = self.character_reference_code * 16 + (next_char - 0x57) as u32;
+            }
+            b';' => {
+                self.state = TokenizerState::NumericCharacterReferenceEnd;
+                let a = b'A'; 
+            }
+            _ => {
+                self.emit_parse_error("missing-semicolon-after-character-reference");
+                self.reconsume_char();
+                self.state = TokenizerState::NumericCharacterReferenceEnd;
+            }
+        }
     }
+    //13.2.5.79 Decimal character reference state
+    fn handle_decimal_character_reference_state(&mut self) {
+        let next_char = self.consume_next_input_char().unwrap();
+    
+        match next_char {
+            b'0'..=b'9' => {
+                self.character_reference_code = self.character_reference_code * 10 + (next_char - b'0') as u32;
+            }
+            b';' => {
+                self.state = TokenizerState::NumericCharacterReferenceEnd; 
+            }
+            _ => {
+                self.emit_parse_error("missing-semicolon-after-character-reference");
+                self.reconsume_char();
+                self.state = TokenizerState::NumericCharacterReferenceEnd;
+            }
+        }
+    }    
 
     fn handle_numeric_character_reference_end_state(&mut self) {
-        // Implementation for Numeric character reference end state
+        if self.character_reference_code == 0x00 {
+            self.emit_parse_error("Null character reference");
+            self.character_reference_code = 0xFFFD;
+        } else if self.character_reference_code > 0x10FFFF {
+            self.emit_parse_error("Character reference outside Unicode range");
+            self.character_reference_code = 0xFFFD;
+        } else if is_surrogate(self.character_reference_code) {
+            self.emit_parse_error("Surrogate character reference");
+            self.character_reference_code = 0xFFFD;
+        } else if is_noncharacter(self.character_reference_code) {
+            self.emit_parse_error("Noncharacter character reference");
+        } else if is_control_character(self.character_reference_code) && self.character_reference_code != 0x0D {
+            if let Some(replacement) = CONTROL_CHARACTER_REPLACEMENTS
+                .iter()
+                .find_map(|&(code, replacement)| {
+                    if self.character_reference_code == code {
+                        Some(replacement)
+                    } else {
+                        None
+                    }
+                })
+            {
+                self.character_reference_code = replacement;
+            } else {
+                self.emit_parse_error("Control character reference");
+            }
+        }
+        self.temporary_buffer.clear();
+        self.temporary_buffer.push(char::from_u32(self.character_reference_code).unwrap_or('\u{FFFD}'));
+        self.flush_code_points_consumed_as_a_character_references();
     }
 
     fn emit_token(&mut self, token: Token) {
@@ -2932,4 +3103,38 @@ impl<'a> Tokenizer<'a> {
             eprintln!("No current tag token to emit.");
         }
     }
+    fn flush_code_points_consumed_as_a_character_references(&mut self){
+        match self.ret_state {
+            TokenizerState::AttributeValueDoubleQuoted | TokenizerState::AttributeValueSingleQuoted 
+            |  TokenizerState::AttributeValueUnquoted => {
+                self.current_tag_value.push_str(self.temporary_buffer.as_str());
+            } 
+            _ => {
+                let chars: Vec<char> = self.temporary_buffer.chars().collect();
+                for ch in chars {
+                    self.emit_token(Token::Character { data: ch });
+                }
+            }
+        }
+        self.temporary_buffer.clear();
+        self.reconsume_char();
+        self.state = self.ret_state.clone();
+    }
+}
+fn is_surrogate(code: u32) -> bool {
+    (0xD800..=0xDBFF).contains(&code) || (0xDC00..=0xDFFF).contains(&code)
+}
+
+fn is_noncharacter(code: u32) -> bool {
+    (0xFDD0..=0xFDEF).contains(&code) ||
+    matches!(code, 0xFFFE | 0xFFFF | 0x1FFFE | 0x1FFFF | 0x2FFFE | 0x2FFFF |
+                  0x3FFFE | 0x3FFFF | 0x4FFFE | 0x4FFFF | 0x5FFFE | 0x5FFFF |
+                  0x6FFFE | 0x6FFFF | 0x7FFFE | 0x7FFFF | 0x8FFFE | 0x8FFFF |
+                  0x9FFFE | 0x9FFFF | 0xAFFFE | 0xAFFFF | 0xBFFFE | 0xBFFFF |
+                  0xCFFFE | 0xCFFFF | 0xDFFFE | 0xDFFFF | 0xEFFFE | 0xEFFFF |
+                  0xFFFFE | 0xFFFFF | 0x10FFFE | 0x10FFFF)
+}
+
+fn is_control_character(code: u32) -> bool {
+    (0x0000..=0x001F).contains(&code) || (0x007F..=0x009F).contains(&code)
 }
